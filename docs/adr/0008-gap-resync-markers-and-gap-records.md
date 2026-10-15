@@ -1,6 +1,6 @@
 # 0008. Gap resync: in-band markers on md.level2, gap records on md.gaps
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context
@@ -67,5 +67,9 @@ Two facts shape the design:
   baseline is and when the last resync happened.
 - If Coinbase really moves to per-product counters, we would see false gaps and constant resyncs;
   the alarm is there to catch that.
-- Whether resubscribe yields a snapshot rests on third-party evidence until the live injector run
-  confirms it.
+- **Measured:** a live 2-minute run with `SIMEX_INGEST_DROP_EVERY=500` produced 5 injected
+  gaps. All 5 recovered via resubscribe, with fresh snapshots for all three products in
+  690–850 ms (about 0.8 s), no reconnect fallbacks and no suppressed resyncs. 19 level2 updates
+  were flagged `awaiting_snapshot` during those windows. That confirms the resubscribe delivers a
+  new snapshot, so the reconnect stays a fallback. A normal 2-minute run had 0 gaps and
+  0 resyncs.
