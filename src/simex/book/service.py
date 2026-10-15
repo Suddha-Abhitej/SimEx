@@ -213,7 +213,7 @@ class BookService:
                 continue  # not this book's (a record keyed differently from its envelope)
             outcome = book.apply(event)
             if audit := AUDIT_OUTCOMES.get(outcome):
-                self.metrics.audits.labels(venue, product, audit).inc()
+                self.metrics.audits.labels(venue, product, audit, event.reason or "unknown").inc()
             else:
                 self.metrics.updates.labels(venue, product, str(outcome)).inc()
             if outcome is Outcome.SNAPSHOT:

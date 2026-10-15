@@ -63,7 +63,7 @@ class BookAudit:
     product_id: str
     update_id: int
     aligned: bool
-    reason: str  # "aligned", or why not: stream_past, timeout, resync, superseded
+    reason: str  # "aligned", or why not: inside_diff, stream_past, timeout, resync, superseded
     bids: tuple[Level, ...]  # best first, as the venue sent them
     asks: tuple[Level, ...]
     received_at_ns: int

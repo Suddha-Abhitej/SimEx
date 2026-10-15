@@ -1,0 +1,55 @@
+# promtool test rules infra/prometheus/tests/book-audit.test.yml (CI runs it; synthetic series)
+rule_files:
+  - ../rules/book-audit.yml
+evaluation_interval: 1m
+tests:
+  # BTC: healthy, ~19 aligned/h from a fresh start (one every 3 min). ETH: aligns for 1 h,
+  # then stops. SOL: synced but never an aligned audit (series absent). ETH mismatches at 30 min.
+  - interval: 1m
+    input_series:
+      - series: 'simex_book_audits_total{venue="gemini",product_id="BTC-USD",outcome="match",reason="aligned"}'
+        values: '0+0.3333x240'
+      - series: 'simex_book_audits_total{venue="gemini",product_id="ETH-USD",outcome="match",reason="aligned"}'
+        values: '0+0.3333x60 20x180'
+      - series: 'simex_book_audits_total{venue="gemini",product_id="ETH-USD",outcome="mismatch",reason="aligned"}'
+        values: '0x30 1x210'
+      - series: 'simex_book_state{venue="gemini",product_id="BTC-USD",state="SYNCED"}'
+        values: '1x240'
+      - series: 'simex_book_state{venue="gemini",product_id="BTC-USD",state="EMPTY"}'
+        values: '0x240'
+      - series: 'simex_book_state{venue="gemini",product_id="ETH-USD",state="SYNCED"}'
+        values: '1x240'
+      - series: 'simex_book_state{venue="gemini",product_id="SOL-USD",state="SYNCED"}'
+        values: '1x240'
+    alert_rule_test:
+      - eval_time: 59m   # fresh start: BTC and ETH never fire
+        alertname: BookAuditsNotAligning
+        exp_alerts: []
+      - eval_time: 61m   # SOL had nothing aligned for a full hour
+        alertname: BookAuditsNotAligning
+        exp_alerts:
+          - exp_labels: {severity: warning, venue: gemini, product_id: SOL-USD}
+            exp_annotations:
+              summary: "SOL-USD: 0 aligned audits in the last hour (gate: 10)"
+              description: 'Check simex_ingest_audits_total{outcome=~"requested|skipped_not_synced|unaligned_.*"} on the ingestor: requests not sent, books not synced, or answers that no longer align.'
+      - eval_time: 165m  # ETH stopped aligning at 60m, under 10/h from ~95m, then 1 h of `for`
+        alertname: BookAuditsNotAligning
+        exp_alerts:
+          - exp_labels: {severity: warning, venue: gemini, product_id: ETH-USD}
+            exp_annotations:
+              summary: "ETH-USD: 0 aligned audits in the last hour (gate: 10)"
+              description: 'Check simex_ingest_audits_total{outcome=~"requested|skipped_not_synced|unaligned_.*"} on the ingestor: requests not sent, books not synced, or answers that no longer align.'
+          - exp_labels: {severity: warning, venue: gemini, product_id: SOL-USD}
+            exp_annotations:
+              summary: "SOL-USD: 0 aligned audits in the last hour (gate: 10)"
+              description: 'Check simex_ingest_audits_total{outcome=~"requested|skipped_not_synced|unaligned_.*"} on the ingestor: requests not sent, books not synced, or answers that no longer align.'
+      - eval_time: 35m
+        alertname: BookAuditMismatch
+        exp_alerts:
+          - exp_labels: {severity: critical, venue: gemini, product_id: ETH-USD}
+            exp_annotations:
+              summary: "ETH-USD book failed an audit in the last hour"
+              description: 'The book differed from the venue''s own top 100 levels at the same update ID. The book service logged the first differing level ("failed its audit").'
+      - eval_time: 100m  # an hour after the mismatch it clears
+        alertname: BookAuditMismatch
+        exp_alerts: []

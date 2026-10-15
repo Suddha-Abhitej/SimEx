@@ -506,7 +506,7 @@ class Ingestor:
             if item.channel == LEVEL2 and item.update_ids is not None:
                 # An audit waiting for this message goes right behind it (ADR 0012).
                 await self._publish_audits(
-                    self.aligner.on_level2(item.product_id, item.update_ids[1])
+                    self.aligner.on_level2(item.product_id, *item.update_ids)
                 )
         if self.resync is not None and not self.awaiting:
             self._complete_resync()

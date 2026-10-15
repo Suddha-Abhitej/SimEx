@@ -391,6 +391,29 @@ def test_an_audit_behind_the_stream_is_published_unaligned():
     assert unaligned >= 1
 
 
+def test_an_audit_answered_mid_batch_is_published_unaligned_inside_diff():
+    fake = FakeGemini()
+    fake.depth_mode = "inside"
+
+    async def script(ingestor, producer, metrics):
+        await wait_until(lambda: len(audit_records(producer)) >= 3)
+
+    _, producer, metrics = asyncio.run(run_against(fake, script, audit_seconds=0.3))
+    level2 = records(producer, "md.level2")
+    for i, record in enumerate(level2):
+        if record["type"] == "audit":
+            assert (record["aligned"], record["reason"]) == (False, "inside_diff")
+            # Published right behind the diff that straddles L.
+            first, last = level2[i - 1]["update_ids"]
+            assert first < record["update_id"] < last
+    _, audits = replay_level2(producer)
+    assert {o for _, o in audits} == {Outcome.AUDIT_UNALIGNED}
+    inside = sample(
+        metrics, "simex_ingest_audits_total", product_id="BTC-USD", outcome="unaligned_inside_diff"
+    )
+    assert inside >= 1
+
+
 def test_a_corrupted_depth_answer_is_a_mismatch_in_the_book():
     fake = FakeGemini()
     fake.corrupt_depth = 1

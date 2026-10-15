@@ -47,31 +47,49 @@ def released(releases):
 
 def test_aligner_publishes_at_once_when_the_matching_diff_was_the_last():
     aligner = AuditAligner(2.0, Clock())
-    assert aligner.on_level2(PRODUCT, 50) == []
+    assert aligner.on_level2(PRODUCT, 40, 50) == []
     assert released(aligner.on_response(response(50))) == [(50, True, "aligned")]
 
 
-def test_aligner_marks_an_audit_the_stream_has_passed_as_unaligned():
+def test_aligner_tells_inside_diff_from_stream_past_when_the_answer_comes_late():
     aligner = AuditAligner(2.0, Clock())
-    aligner.on_level2(PRODUCT, 60)
+    aligner.on_level2(PRODUCT, 40, 60)
+    # L strictly inside the last diff (U < L < u): no point in the stream matches it.
+    assert released(aligner.on_response(response(50))) == [(50, False, "inside_diff")]
+    # L == U is the end of the diff before: an exact point the stream has already passed.
+    assert released(aligner.on_response(response(40))) == [(40, False, "stream_past")]
+    aligner.on_level2(PRODUCT, 60, 70)
     assert released(aligner.on_response(response(50))) == [(50, False, "stream_past")]
+
+
+def test_aligner_an_answer_at_the_snapshot_id_is_stream_past_not_inside_diff():
+    aligner = AuditAligner(2.0, Clock())
+    aligner.on_level2(PRODUCT, 100, 100)  # a snapshot at 100 (U == u)
+    aligner.on_level2(PRODUCT, 95, 120)  # the first diff after it straddles the snapshot's ID
+    assert released(aligner.on_response(response(100))) == [(100, False, "stream_past")]
+    assert released(aligner.on_response(response(110))) == [(110, False, "inside_diff")]
 
 
 def test_aligner_holds_an_early_audit_until_its_diff():
     aligner = AuditAligner(2.0, Clock())
-    aligner.on_level2(PRODUCT, 40)
+    aligner.on_level2(PRODUCT, 30, 40)
     assert aligner.on_response(response(50)) == []
     assert aligner.next_deadline() == 102.0
-    assert aligner.on_level2("ETH-USD", 50) == []  # another product's diff changes nothing
-    assert aligner.on_level2(PRODUCT, 45) == []  # not there yet
-    assert released(aligner.on_level2(PRODUCT, 50)) == [(50, True, "aligned")]
+    assert aligner.on_level2("ETH-USD", 45, 50) == []  # another product's diff changes nothing
+    assert aligner.on_level2(PRODUCT, 40, 45) == []  # not there yet
+    assert released(aligner.on_level2(PRODUCT, 45, 50)) == [(50, True, "aligned")]
     assert aligner.held == {} and aligner.next_deadline() is None
 
 
 def test_aligner_releases_a_held_audit_unaligned_when_a_diff_jumps_past_it():
     aligner = AuditAligner(2.0, Clock())
-    aligner.on_response(response(50))  # nothing seen yet for the product: held
-    assert released(aligner.on_level2(PRODUCT, 51)) == [(50, False, "stream_past")]
+    aligner.on_level2(PRODUCT, 30, 45)
+    aligner.on_response(response(50))
+    # The live case: Gemini answered mid-batch, and the next 100 ms diff straddles L.
+    assert released(aligner.on_level2(PRODUCT, 45, 55)) == [(50, False, "inside_diff")]
+    # A diff that starts beyond L (only possible across a break) is stream_past.
+    aligner.on_response(response(60))
+    assert released(aligner.on_level2(PRODUCT, 61, 70)) == [(60, False, "stream_past")]
 
 
 def test_aligner_timeout_resync_and_superseded():
@@ -83,7 +101,7 @@ def test_aligner_timeout_resync_and_superseded():
     clock.now += 0.2
     assert released(aligner.expire()) == [(50, False, "timeout")]
 
-    aligner.on_level2(PRODUCT, 40)
+    aligner.on_level2(PRODUCT, 30, 40)
     aligner.on_response(response(60))
     assert released(aligner.on_response(response(70))) == [(60, False, "superseded")]
     assert released(aligner.on_resync([PRODUCT, "ETH-USD"])) == [(70, False, "resync")]
@@ -291,10 +309,18 @@ def test_service_counts_audits_and_requests_one_resync_per_mismatch(caplog):
 
     labels = {"venue": VENUE, "product_id": PRODUCT}
     counts = {
-        outcome: sample(metrics, "simex_book_audits_total", outcome=outcome, **labels)
+        (outcome, reason): sample(
+            metrics, "simex_book_audits_total", outcome=outcome, reason=reason, **labels
+        )
         for outcome in ("match", "mismatch", "skipped", "unaligned")
+        for reason in ("aligned", "timeout")
     }
-    assert counts == {"match": 1, "mismatch": 1, "skipped": 2, "unaligned": 1}
+    assert {k: v for k, v in counts.items() if v} == {
+        ("match", "aligned"): 1,
+        ("mismatch", "aligned"): 1,
+        ("skipped", "aligned"): 2,
+        ("unaligned", "timeout"): 1,
+    }
     assert service.books[PRODUCT].state is BookState.RESYNCING
     assert requester.sent == [(VENUE, PRODUCT, "audit_mismatch")]
     assert (
@@ -332,7 +358,10 @@ def test_a_mismatch_replayed_from_history_sends_no_request():
         history=3,
     )
     labels = {"venue": VENUE, "product_id": PRODUCT}
-    assert sample(metrics, "simex_book_audits_total", outcome="mismatch", **labels) == 1
+    mismatches = sample(
+        metrics, "simex_book_audits_total", outcome="mismatch", reason="aligned", **labels
+    )
+    assert mismatches == 1
     assert requester.sent == [] and service.books[PRODUCT].ready
 
 

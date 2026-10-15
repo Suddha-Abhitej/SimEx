@@ -33,9 +33,11 @@ class BookMetrics:
         )
         self.audits = Counter(
             "simex_book_audits",
-            "Book audits against the venue's own top levels (ADR 0012): match, mismatch, "
-            "skipped (aligned but the book isn't SYNCED at that update), unaligned",
-            [*labels, "outcome"],
+            "Book audits against the venue's own top levels (ADR 0012): outcome match, mismatch, "
+            "skipped (aligned but the book isn't SYNCED at that update) or unaligned; reason is "
+            "how the ingestor placed it (aligned, inside_diff, stream_past, timeout, resync, "
+            "superseded)",
+            [*labels, "outcome", "reason"],
             registry=r,
         )
         self.resync_requests = Counter(

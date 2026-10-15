@@ -10,8 +10,10 @@ It reproduces what the live probe measured, not real market data:
 - {"method": "ping"} is answered with {"id": N, "status": 200}
 - {"method": "depth", "params": {"symbol": "btcusd"}} is answered with the server's own book at
   lastUpdateId == the last u it sent for the symbol (ADR 0012). depth_mode can make it answer
-  ahead of the stream ("early": the response, then the diff it matches) or behind it ("late": a
-  diff, then a response for the u before it); corrupt_depth corrupts the next N responses.
+  ahead of the stream ("early": the response, then the diff it matches), behind it ("late": a
+  diff, then a response for the u before it) or mid-batch as live Gemini does about a third of
+  the time ("inside": a response at an ID strictly inside the next diff, U < L < u);
+  corrupt_depth corrupts the next N responses.
 """
 
 from __future__ import annotations
@@ -121,10 +123,16 @@ class FakeGemini:
             self._apply(diff)
             await self._depth_response(request_id, symbol, diff["u"])
             await self._send(diff)
+        elif self.depth_mode == "inside":
+            # The venue answered at an ID in the middle of the next 100 ms batch.
+            inside = self._advance(1)
+            await self._depth_response(request_id, symbol, inside)
+            await self.update(SYMBOLS_BY_VENUE[symbol], bids=self.bigger_best_bid(symbol))
         elif self.depth_mode == "late":
             # The answer is for the u before a diff the client already has.
             before = self.sent_u[symbol]
             response = self._top(symbol)
+            self._last_u[symbol] = before  # the next diff starts exactly at L: L is a boundary
             await self.update(SYMBOLS_BY_VENUE[symbol], bids=self.bigger_best_bid(symbol))
             await self._depth_response(request_id, symbol, before, response)
         else:

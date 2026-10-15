@@ -99,7 +99,10 @@ and the level lists are empty unless the state is SYNCED.
 The `market_trades` age never drives a reader's stale check.
 
 **Book audit** (issue #46, built after #5). Gemini's one-shot `depth` request returns the top
-200 levels (100 a side) at a `lastUpdateId` equal to the stream's latest `u` (ADR 0011).
+200 levels (100 a side) at an update ID, `lastUpdateId` (L). ADR 0011's probe found L equal to
+the stream's latest `u`; the live audit run (see Measured) refines that: it holds only when the
+request lands between the stream's 100 ms batches. Gemini answers at the moment it is asked, so
+about a third of the time L falls inside the next batch, and no point in the stream matches it.
 
 - **The ingestor (only it talks to the exchange)** sends one per product every
   `INGEST_AUDIT_SECONDS` (default 120). The products take turns, one request every
@@ -112,14 +115,25 @@ The `market_trades` age never drives a reader's stale check.
 - **Exactness rule** (`simex.ingest.audit.AuditAligner`). The ingestor tracks the last `u` it
   published per product:
   - if that `u == L` when the response arrives, it publishes the audit right away, `aligned`;
-  - if it is already past `L`, it publishes the audit right away, unaligned (`stream_past`);
+  - if it is already past `L`, it publishes the audit right away, unaligned;
   - otherwise the response arrived before its diff, and it is **held**, keyed by product. After
     publishing each level2 message the ingestor checks the held audit: a message ending at
     exactly `L` releases it right behind that message, `aligned`; a message that jumps past `L`
-    releases it unaligned (`stream_past`). It is also released unaligned if the hold reaches
+    releases it unaligned. It is also released unaligned if the hold reaches
     `INGEST_AUDIT_HOLD_SECONDS` (2 s, `timeout`), if a resync starts for the product (after the
     resync marker, `resync`), or if a newer audit for the product arrives (`superseded`).
+  - An audit the stream has passed gets one of two reasons. **`inside_diff`**: `L` falls strictly
+    inside the product's message that passed it (`U < L < u`) and isn't the end of the message
+    before it; there is no point in the stream to compare at. This is the normal live case: the
+    answer reaches us 10 to 90 ms before the batch that straddles `L`, is held, and that batch
+    releases it. **`stream_past`**: the stream had already passed `L` at a message boundary (`L`
+    is the previous message's `u`, which on Gemini is also this diff's `U`, or a snapshot's ID).
+    The remaining reasons (`timeout`, `resync`, `superseded`) are any other cause.
   - Nothing is ever dropped: every response is published once, so the counts add up.
+  - **Not built: retry on `inside_diff`.** Asking again right away would turn about 87% of turns
+    into an exact compare (at about 64% aligned per try) for about one extra request per product
+    every few minutes. The gate below is met without it, so it is left as a possible later
+    improvement.
 - **The book's comparison.** An unaligned audit counts as `unaligned`, never as a match. An
   aligned audit is compared only if the book is SYNCED with `last_update_id == L`; otherwise it is
   `skipped`. The compare sorts the venue's levels and checks the top 100 a side, price and size
@@ -141,13 +155,26 @@ The `market_trades` age never drives a reader's stale check.
 
 **Audit and back-channel metrics:**
 
-- book (port 9102): `simex_book_audits_total{outcome=match|mismatch|skipped|unaligned}`,
+- book (port 9102): `simex_book_audits_total{outcome=match|mismatch|skipped|unaligned, reason}`,
+  where `reason` is how the ingestor placed the audit (`aligned`, `inside_diff`, `stream_past`,
+  `timeout`, `resync`, `superseded`); match, mismatch and skipped always have `reason="aligned"`;
   `simex_book_resync_requests_total{reason=audit_mismatch|crossed}`, and
   `simex_book_resyncs_total{reason=audit_mismatch}`;
 - ingestor (port 9101, labels `venue` and `product_id`): `simex_ingest_audits_total{outcome}`,
-  with `requested`, `skipped_not_synced`, `aligned`, and `unaligned_<reason>`;
+  with `requested`, `skipped_not_synced`, `aligned`, and `unaligned_<reason>` (for example
+  `unaligned_inside_diff`);
   `simex_ingest_resync_requests_total{outcome=accepted|duplicate|unknown}`; and
   `simex_ingest_resyncs_total{method="resubscribe", trigger="book_request"}`.
+
+**The week-1 audit gate:** **0 mismatches, and at least 10 aligned audits per product per hour.**
+At the default interval each product is asked 30 times an hour and about 64% align, so a healthy
+product gets about 19. Fewer than 10 means the audit itself has stopped working (requests not
+sent, books not synced, or answers no longer aligning), which a mismatch count of 0 would hide.
+Both halves are Prometheus alerts in `infra/prometheus/rules/book-audit.yml`, with a `promtool`
+test that CI runs: `BookAuditMismatch` (critical, any mismatch in the last hour) and
+`BookAuditsNotAligning` (warning, under 10 aligned in the last hour for an hour; a product with
+none at all counts as 0, and the hour of `for` keeps a fresh start from firing). There is no
+Alertmanager yet; the alerts show on Prometheus's Alerts page.
 
 **Metrics** (port 9102, labels `venue` and `product_id`):
 
@@ -167,8 +194,9 @@ The `market_trades` age never drives a reader's stale check.
 - A crossed book or a failed audit recovers within one resubscribe (tens of milliseconds plus the
   rate limiter), not at the next refresh. If the request can't be sent, the next refresh still
   recovers it.
-- An audit proves the top 100 levels a side at one instant, every 2 minutes per product. A
-  mismatch deeper than 100 levels, or one that heals itself between audits, goes unseen.
+- An audit proves the top 100 levels a side at one instant, every 2 minutes per product, and
+  only about two in three can be compared. A mismatch deeper than 100 levels, or one that heals
+  itself between audits, goes unseen.
 - Readers get one consistent JSON per product per read, with no partial hashes. A dead service
   shows up as a missing key within 2 s.
 - Valkey holds only the top N levels. Anything that needs the full book (the matching engine)
@@ -202,3 +230,21 @@ ETH SYNCED again 60 ms after the corrupted answer; the following ETH audits matc
 other audit in the run matched and all were aligned. A restarted book service replayed four
 earlier mismatches from `md.level2` and, as designed, sent no request for them (the first version
 did, which caused a needless resubscribe).
+
+**Audit, live (#46).** 30 minutes against live Gemini on 2026-10-15, from a cloud container with
+a local Kafka and Redis, default settings (`INGEST_AUDIT_SECONDS=120`):
+
+| | BTC | ETH | SOL | Total |
+| --- | --- | --- | --- | --- |
+| Audits | 15 | 15 | 15 | **45** |
+| Aligned | 10 | 9 | 10 | **29 (64%)** |
+| Match / mismatch | 10 / 0 | 9 / 0 | 10 / 0 | **29 / 0** |
+| Unaligned | 5 | 6 | 5 | **16, all `inside_diff`** |
+
+Reading every audit back from `md.level2`: for each unaligned one, `L` was not the `u` of any
+diff of the product, and exactly one diff had `u > L`, the one straddling it. The answer arrived
+10 to 90 ms before that diff, was held, and the diff released it. (The run predates the
+`inside_diff` label and recorded them as `stream_past`; the new rule classifies all 16 as
+`inside_diff`.) This is Gemini answering `depth` at the moment it is asked while the stream
+batches every 100 ms; it is not a fault in the book or the ingestor. In the same run the books
+were usable 7130/7130 polls each, with 0 crossed, 0 Valkey errors, 0 gaps and 0 resync requests.

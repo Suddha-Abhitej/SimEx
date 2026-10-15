@@ -221,9 +221,12 @@ python scripts/book_report.py --seconds 60       # states, usability, counters (
   ID and timestamps. **A reader may use it only if** the key exists, `state` is `SYNCED`,
   `catching_up` is false and `received_at_ns` is less than 5 s old (`simex.book.record.usable`).
 - **Audit:** each book compares its top 100 levels a side, exactly, with the ingestor's audits
-  (about one per product every 2 minutes). `simex_book_audits_total{outcome}` counts `match`,
-  `mismatch` (should stay 0), `skipped` and `unaligned`. A mismatch or a crossed book logs an
-  error, drops the book to RESYNCING and asks the ingestor for a fresh snapshot on
+  (about one per product every 2 minutes). `simex_book_audits_total{outcome,reason}` counts
+  `match`, `mismatch` (should stay 0), `skipped` and `unaligned`. About a third of Gemini audits
+  are unaligned with `reason="inside_diff"`: Gemini answered mid-way through a 100 ms batch, so no
+  point in the stream matches. The gate is 0 mismatches and at least 10 aligned audits per
+  product per hour, as Prometheus alerts in `infra/prometheus/rules/`. A mismatch or a crossed
+  book logs an error, drops the book to RESYNCING and asks the ingestor for a fresh snapshot on
   `ctl.resync_requests`, so it is SYNCED again within about a second rather than at the next
   30-minute refresh. Failures replayed from history at startup send no request.
 - **Metrics** are at `http://127.0.0.1:9102/metrics`: book state, level counts, crossed books
