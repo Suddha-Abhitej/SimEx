@@ -9,9 +9,9 @@ reports after N seconds:
 - feed lag: E vs local receive time, raw and corrected by the local clock's NTP offset
 - snapshots: Gemini sends them as a depthUpdate with U == u and the full book; how they are
   detected, their size, time from SUBSCRIBE, and how the next diffs relate to them
-- what U and u are: per-symbol counters, a counter shared across symbols, or timestamps.
-  It prints U, u and E side by side, the distributions of u - U, U - previous u and u - E, and
-  the steps between consecutive diffs of all symbols in arrival order.
+- how U and u chain: U, u and E side by side, how the first diff relates to each snapshot,
+  the distributions of u - U and U - previous u, how fast the IDs advance, and the steps
+  between consecutive diffs of all symbols in arrival order (is the counter shared?)
 - trade-ID continuity per symbol and across symbols, and trades per minute
 - the shape (keys only) of every kind of frame, ping round trip and conninfo
 
@@ -131,7 +131,9 @@ class Follow:
 class Depth:
     """Everything observed on one symbol's depth stream."""
 
-    subscribe_sent: float | None = None  # a SUBSCRIBE whose first depth frame hasn't arrived
+    subscribe_sent: float | None = None  # a SUBSCRIBE whose snapshot hasn't arrived yet
+    in_flight: int = 0  # diffs that arrived between that SUBSCRIBE and its snapshot
+    fresh: bool = False  # the next diff is the first after a snapshot
     last_u: int | None = None
     diffs: int = 0
     before_snapshot: int = 0
@@ -142,7 +144,10 @@ class Depth:
     first_frames: list[str] = field(default_factory=list)  # first depth frame after a SUBSCRIBE
     spans: list[int] = field(default_factory=list)  # u - U
     steps: list[int] = field(default_factory=list)  # U - previous u
-    u_minus_e: list[int] = field(default_factory=list)  # u - E, both in ns
+    first_after_snapshot: Counter = field(default_factory=Counter)
+    # (u, E in ns) of the first and latest diff after the first snapshot, for the ID rate
+    id_start: tuple[int, int] | None = None
+    id_end: tuple[int, int] | None = None
     step_kinds: Counter = field(default_factory=Counter)
     table: list[str] = field(default_factory=list)
     follows: list[Follow] = field(default_factory=list)
@@ -311,21 +316,25 @@ class Probe:
             d.single_id_frames.append(
                 f"{bids + asks} levels, {size} B" + (f", first frame {since}" if since else "")
             )
-        if after_subscribe:
+        if after_subscribe and d.in_flight == 0:
             d.first_frames.append(f"U {'==' if first == last else '!='} u, {bids + asks} levels")
-            d.subscribe_sent = None
 
         is_snapshot = first == last and (after_subscribe or bids + asks >= SNAPSHOT_MIN_LEVELS)
         if is_snapshot:
-            why = "first frame after SUBSCRIBE" if after_subscribe else "large U == u frame"
+            why = "U == u after SUBSCRIBE" if after_subscribe else "large U == u frame"
             d.snapshots.append(
                 f"{bids} bids + {asks} asks = {bids + asks} levels, {size} B ({size / 1e3:.0f} KB)"
-                f", {since or 'no SUBSCRIBE pending'}; detected as {why}; U = u = {last}"
+                f", {since or 'no SUBSCRIBE pending'}, {d.in_flight} diffs arrived before it"
+                f"; detected as {why}; U = u = {last}"
             )
             d.snapshot_bytes += size
             d.last_u = last
+            d.fresh = True
+            d.subscribe_sent, d.in_flight = None, 0
             d.follows.append(Follow(f"snapshot at {last}", last))
             return True
+        if after_subscribe:
+            d.in_flight += 1
 
         d.diffs += 1
         for follow in d.follows:
@@ -338,20 +347,36 @@ class Probe:
             return False
 
         step = first - d.last_u
-        d.steps.append(step)
-        d.spans.append(last - first)
-        d.step_kinds["U == prev u + 1"] += step == 1
-        d.step_kinds["U <= prev u (overlap/repeat)"] += step <= 0
-        d.step_kinds["U > prev u + 1 (skip)"] += step > 1
-        d.step_kinds["u < prev u (goes backwards)"] += last < d.last_u
         e_ns = to_ns(msg["E"]) if isinstance(msg.get("E"), int) else None
         if e_ns is not None:
-            d.u_minus_e.append(last - e_ns)
+            d.id_end = (last, e_ns)
+            d.id_start = d.id_start or d.id_end
         if len(d.table) < TABLE_ROWS:
             d.table.append(
                 f"{e_ns or '-':>20} {first:>20} {last:>20} {step:>14} {last - first:>12} "
-                f"{(last - e_ns) if e_ns is not None else '-':>14} {sum(levels_of(msg)):>6}"
+                f"{sum(levels_of(msg)):>6}"
             )
+        if d.fresh:
+            # The first diff after a snapshot is judged against the snapshot's ID L.
+            d.fresh = False
+            relation = (
+                "U <= L < u (straddles the snapshot)"
+                if first <= d.last_u < last
+                else "U == L + 1"
+                if step == 1
+                else "u <= L (stale)"
+                if last <= d.last_u
+                else "U > L + 1 (gap)"
+            )
+            d.first_after_snapshot[relation] += 1
+        else:
+            d.steps.append(step)
+            d.spans.append(last - first)
+            d.step_kinds["U == prev u"] += step == 0
+            d.step_kinds["U == prev u + 1"] += step == 1
+            d.step_kinds["U < prev u (overlap)"] += step < 0
+            d.step_kinds["U > prev u + 1 (skip)"] += step > 1
+            d.step_kinds["u < prev u (goes backwards)"] += last < d.last_u
         d.last_u = max(d.last_u, last)
 
         if self.global_last_u is not None:
@@ -500,17 +525,18 @@ class Probe:
                 print(f"    {line}")
             for follow in d.follows:
                 print(f"  Next diffs after {follow.label}: {follow.lines or 'none'}")
-            print("  After the first snapshot:")
+            print(f"  First diff after each snapshot: {dict(d.first_after_snapshot) or 'none'}")
+            print("  Later diffs:")
             for kind, n in d.step_kinds.items():
                 print(f"    {kind:<30} {n}")
             print(f"    u - U:          {dist(d.spans)}")
             print(f"    U - previous u: {dist(d.steps)}")
-            print(f"    u - E (ns):     {dist(d.u_minus_e)}")
+            print(f"    IDs per second: {id_rate(d)}")
             if d.table:
                 print(f"  First {len(d.table)} diffs after the first snapshot:")
                 print(
                     f"  {'E (ns)':>20} {'U':>20} {'u':>20} {'U - prev u':>14} {'u - U':>12} "
-                    f"{'u - E':>14} {'levels':>6}"
+                    f"{'levels':>6}"
                 )
                 for row in d.table:
                     print(f"  {row}")
@@ -547,18 +573,27 @@ class Probe:
             print(f"  {kind}: {json.dumps(frame_shape)}")
 
 
+def id_rate(d: Depth) -> str:
+    if d.id_start is None or d.id_end is None or d.id_end[1] == d.id_start[1]:
+        return "n/a"
+    rate = (d.id_end[0] - d.id_start[0]) / ((d.id_end[1] - d.id_start[1]) / 1e9)
+    return f"{rate:,.0f} (u advance per second of E)"
+
+
 def verdict(d: Depth) -> str:
     if not d.steps:
         return "not enough diffs after a snapshot"
-    contiguous = sum(s == 1 for s in d.steps) / len(d.steps)
-    if contiguous >= 0.99:
-        return f"per-symbol counter: {contiguous:.1%} of diffs have U == prev u + 1"
-    if d.u_minus_e and abs(statistics.median(d.u_minus_e)) < 1_000_000_000 and d.steps[0] != 1:
+    n = len(d.steps)
+    same = sum(s == 0 for s in d.steps) / n
+    plus_one = sum(s == 1 for s in d.steps) / n
+    if same >= 0.99:
         return (
-            f"u tracks E (median u - E {statistics.median(d.u_minus_e) / 1e6:+.1f} ms): "
-            "U/u look like epoch-ns timestamps, not counters"
+            f"chained: {same:.1%} of diffs have U == previous u (each diff starts at the last "
+            f"diff's u); a gap is U != previous u. ID rate {id_rate(d)}"
         )
-    return f"unclear: only {contiguous:.1%} contiguous; see the distributions above"
+    if plus_one >= 0.99:
+        return f"chained: {plus_one:.1%} of diffs have U == previous u + 1; a gap is U > prev u + 1"
+    return f"unclear: {same:.1%} U == prev u, {plus_one:.1%} U == prev u + 1"
 
 
 def main() -> None:
