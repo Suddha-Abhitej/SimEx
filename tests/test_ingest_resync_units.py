@@ -209,3 +209,40 @@ def test_gap_during_resubscribe_in_flight_does_not_resubscribe_again():
     assert gap["resync_action"] == "covered_by_resync_in_flight"
     assert gap["resync_id"] == "r1"
     assert ingestor.metrics.registry.get_sample_value("simex_ingest_resyncs_suppressed_total") == 0
+
+
+def test_last_message_age_per_product_and_channel():
+    import asyncio
+
+    from coinbase_samples import HEARTBEAT
+    from test_ingest_end_to_end import FakeProducer
+
+    clock = FakeClock()
+    metrics = IngestMetrics()
+    ingestor = CoinbaseIngestor(
+        Settings(), producer=FakeProducer(), metrics=metrics, monotonic=clock
+    )
+
+    def age(product, channel):
+        return metrics.registry.get_sample_value(
+            "simex_ingest_last_message_age_seconds",
+            {"product_id": product, "channel": channel},
+        )
+
+    # Every series exists from the start, at +Inf, so a guard never sees a missing series.
+    assert age("BTC-USD", "level2") == float("inf")
+    assert age("SOL-USD", "market_trades") == float("inf")
+    assert age("", "heartbeats") == float("inf")
+
+    asyncio.run(ingestor.handle(raw(TRADES)))  # an ETH-USD trade
+    asyncio.run(ingestor.handle(raw(HEARTBEAT)))
+    clock.now += 2.5
+    assert age("ETH-USD", "market_trades") == 2.5
+    assert age("", "heartbeats") == 2.5
+    assert age("BTC-USD", "market_trades") == float("inf")
+    assert age("ETH-USD", "level2") == float("inf")  # level2 is tracked separately
+
+    asyncio.run(ingestor.handle(raw(L2_SNAPSHOT)))  # a BTC-USD snapshot
+    clock.now += 1.0
+    assert age("BTC-USD", "level2") == 1.0
+    assert age("ETH-USD", "market_trades") == 3.5

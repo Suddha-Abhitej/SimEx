@@ -110,6 +110,7 @@ class CoinbaseIngestor:
         # Every book starts invalid: nothing downstream has a snapshot yet.
         self.awaiting: set[str] = set(pairs)
         self.last_snapshot: dict[str, float] = {}
+        self.last_message: dict[tuple[str, str], float] = {}
         self.resync: Resync | None = None
         self.resubscribe_wanted = False
         self._pending_disconnect: PendingDisconnect | None = None
@@ -117,6 +118,11 @@ class CoinbaseIngestor:
         self._messages_on_connection = 0
 
         metrics.feed_gaps_last_minute.set_function(self.gap_rate.count)
+        series = [(p, ch) for p in pairs for ch in ("level2", "market_trades")]
+        for product, channel in [*series, ("", "heartbeats")]:
+            metrics.last_message_age.labels(product, channel).set_function(
+                lambda key=(product, channel): self._seconds_since_message(key)
+            )
         for product in pairs:
             metrics.awaiting_snapshot.labels(product).set(1)
             metrics.time_since_last_snapshot.labels(product).set_function(
@@ -133,6 +139,10 @@ class CoinbaseIngestor:
 
     def _seconds_since_snapshot(self, product: str) -> float:
         last = self.last_snapshot.get(product)
+        return float("inf") if last is None else self._mono() - last
+
+    def _seconds_since_message(self, key: tuple[str, str]) -> float:
+        last = self.last_message.get(key)
         return float("inf") if last is None else self._mono() - last
 
     def _set_awaiting(self, products: set[str]) -> None:
@@ -312,7 +322,9 @@ class CoinbaseIngestor:
         if len(envelopes) > 1:
             log.debug("message carries %d products; published once per product", len(envelopes))
 
+        now = self._mono()
         for envelope in envelopes:
+            self.last_message[(envelope.product_id, envelope.channel)] = now
             await self._publish(envelope)
         if self.resync is not None and not self.awaiting:
             self._complete_resync()
