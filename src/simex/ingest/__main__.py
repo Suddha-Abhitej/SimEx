@@ -14,7 +14,12 @@ from .backoff import Backoff
 from .client import CoinbaseIngestor
 from .config import Settings
 from .envelope import GAPS_TOPIC, TOPICS
-from .kafka import create_producer, ensure_topics
+from .kafka import (
+    create_producer,
+    ensure_topics,
+    level2_retention_problem,
+    level2_topic_configs,
+)
 from .metrics import IngestMetrics
 
 log = logging.getLogger("simex.ingest")
@@ -31,6 +36,11 @@ async def connect_kafka(settings: Settings):
                 [*TOPICS.values(), GAPS_TOPIC],
                 settings.topic_partitions,
                 settings.topic_replication_factor,
+                configs={
+                    TOPICS["level2"]: level2_topic_configs(
+                        settings.level2_retention_ms, settings.level2_retention_bytes
+                    )
+                },
             )
             await producer.start()
             return producer
@@ -48,6 +58,10 @@ async def connect_kafka(settings: Settings):
 
 async def main() -> None:
     settings = Settings.from_env()
+    if problem := level2_retention_problem(
+        settings.level2_retention_ms, settings.snapshot_refresh_seconds
+    ):
+        log.error("%s (ADR 0009)", problem)
     metrics = IngestMetrics()
     start_http_server(settings.metrics_port, registry=metrics.registry)
     log.info("metrics on http://0.0.0.0:%d/metrics", settings.metrics_port)
