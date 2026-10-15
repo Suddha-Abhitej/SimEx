@@ -135,8 +135,18 @@ uses about 3 GB of the server's 12 GB, leaving room for the SimEx services.
 to `level2`, `market_trades` and `heartbeats` for the configured pairs, and publishes every message
 to Kafka topics `md.level2`, `md.trades` and `md.heartbeats` (envelope format:
 [ADR 0007](docs/adr/0007-market-data-envelope-and-topics.md)).
-It creates the topics if missing, reconnects with jittered backoff, treats 10s without a message as
-a stale socket, and logs sequence gaps. Metrics (messages, feed lag, gaps, reconnects) are at
+It creates the topics if missing, reconnects with jittered backoff, and treats 10s without a
+message as a stale socket. On a sequence gap or disconnect it publishes a resync marker per product
+to `md.level2`, records the gap on `md.gaps`, and resubscribes level2 for fresh snapshots, falling
+back to a reconnect ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md)). To exercise
+that path against the live feed, set `SIMEX_INGEST_DROP_EVERY=500` (dev only; it drops every
+500th message on purpose).
+
+For stale-data checks use `simex_ingest_last_message_age_seconds{product_id,channel}` together
+with `simex_ingest_awaiting_snapshot{product_id}`. Quiet products can go seconds without a trade,
+so `market_trades` age reflects trading activity; `level2` and `heartbeats` age reflect the feed.
+`simex_ingest_time_since_last_snapshot_seconds` is not a staleness signal: Coinbase only sends a
+snapshot on subscribe, so it grows for as long as the connection is healthy. Metrics (messages, feed lag, gaps, reconnects) are at
 `http://127.0.0.1:9101/metrics` and scraped by Prometheus. Settings are environment variables
 listed in `.env.example`; the defaults suit the local stack.
 

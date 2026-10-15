@@ -22,6 +22,14 @@ class Settings:
     stale_after_seconds: float = 10.0
     backoff_initial_seconds: float = 1.0
     backoff_max_seconds: float = 60.0
+    # At most one level2 resubscribe per this many seconds after gaps (ADR 0008).
+    resync_min_interval_seconds: float = 5.0
+    # If a resubscribe hasn't produced every product's snapshot by then, reconnect instead.
+    resync_timeout_seconds: float = 10.0
+    # More real gaps than this per minute suggests Coinbase changed its sequence semantics.
+    gap_alert_per_minute: int = 10
+    # Dev-only fault injector: drop every Nth received message. 0 means off.
+    drop_every: int = 0
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -47,4 +55,12 @@ class Settings:
                 get("INGEST_BACKOFF_INITIAL_SECONDS", d.backoff_initial_seconds)
             ),
             backoff_max_seconds=float(get("INGEST_BACKOFF_MAX_SECONDS", d.backoff_max_seconds)),
+            resync_min_interval_seconds=float(
+                get("INGEST_RESYNC_MIN_INTERVAL_SECONDS", d.resync_min_interval_seconds)
+            ),
+            resync_timeout_seconds=float(
+                get("INGEST_RESYNC_TIMEOUT_SECONDS", d.resync_timeout_seconds)
+            ),
+            gap_alert_per_minute=int(get("INGEST_GAP_ALERT_PER_MINUTE", d.gap_alert_per_minute)),
+            drop_every=int(get("SIMEX_INGEST_DROP_EVERY", d.drop_every)),
         )
