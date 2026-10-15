@@ -262,7 +262,9 @@ python scripts/replay_check.py --last-hours 1    # after a full UTC hour: replay
   snapshot, every recorded aligned audit still matches, and recorded and replayed audit counts
   agree; it prints the window's size as GB/day, and no prices.
 - **Retention:** `RECORDER_RETENTION_DAYS` (30) days are kept. `RECORDER_REQUIRE_ARCHIVED=1` keeps
-  an expired day until the (future) nightly copy to the home server marks it `_ARCHIVED`.
+  an expired day until the (future) nightly copy to the home server marks it `_ARCHIVED`. A day
+  that can't be deleted (a file held open on Windows) is retried on the next hourly pass and
+  counted in `simex_recorder_retention_errors_total`; recording carries on.
 - **Metrics** are at `http://127.0.0.1:9103/metrics`: records, lag in records and seconds per
   channel, seconds since the last write and file, duplicates skipped, lost offsets. The
   `RecordingLagging` alert looks at `md.level2` only (trades can be silent for minutes).

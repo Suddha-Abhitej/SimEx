@@ -333,11 +333,18 @@ class Recorder:
     def _apply_retention(self) -> None:
         self._retention_at = self._mono()
         now = datetime.fromtimestamp(self._clock_ns() / 1e9, UTC)
-        deleted = apply_retention(
-            self.root, now, self.settings.retention_days, self.settings.require_archived
-        )
-        if deleted:
-            self.metrics.retention_deleted.inc(deleted)
+        try:
+            result = apply_retention(
+                self.root, now, self.settings.retention_days, self.settings.require_archived
+            )
+        except OSError as exc:  # listing the directories failed; recording must go on
+            log.warning("retention pass failed (%r); retrying on the next pass", exc)
+            self.metrics.retention_errors.inc()
+            return
+        if result.deleted:
+            self.metrics.retention_deleted.inc(result.deleted)
+        if result.failed:
+            self.metrics.retention_errors.inc(result.failed)
 
     # Run ---------------------------------------------------------------------------------------
 

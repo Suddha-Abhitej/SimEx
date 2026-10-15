@@ -73,3 +73,9 @@ class RecorderMetrics:
             "Date directories deleted by retention",
             registry=r,
         )
+        self.retention_errors = Counter(
+            "simex_recorder_retention_errors",
+            "Date directories retention couldn't delete (for example a file held open on "
+            "Windows); retried on the next hourly pass",
+            registry=r,
+        )

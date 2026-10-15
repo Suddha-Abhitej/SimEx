@@ -91,7 +91,10 @@ committed either, so the records are read again. Up to an hour of data lives onl
 time; md.level2 keeps 24 hours (ADR 0009).
 
 **Retention.** Every hour, date directories older than `RECORDER_RETENTION_DAYS` (30) are deleted;
-today and yesterday never are. The nightly copy to the home server is a later, separate script.
+today and yesterday never are. Cleanup never stops recording: a directory that can't be deleted
+(on Windows, a file held open by a DuckDB query or an Explorer preview raises `PermissionError`)
+is logged, counted in `simex_recorder_retention_errors_total` and retried on the next pass, and
+the other expired directories are still deleted. The nightly copy to the home server is a later, separate script.
 The hook is ready: with `RECORDER_REQUIRE_ARCHIVED=1` an expired day is deleted only once that
 script has written `date=.../_ARCHIVED`. Records older than the retention horizon are not
 recorded at all, so a long re-read can't recreate a deleted day.
@@ -110,7 +113,7 @@ how many GB/day the window takes.
 `simex_recorder_seconds_since_last_write` (row group or file), `..._seconds_since_last_file`,
 `..._files_total`, `..._bytes_total`, `..._open_files`, `..._duplicates_skipped_total`,
 `..._skipped_total{reason=foreign_venue|unrecordable|past_retention}`,
-`..._lost_offsets_total`, `..._retention_deleted_days_total`.
+`..._lost_offsets_total`, `..._retention_deleted_days_total`, `..._retention_errors_total`.
 
 **Alert** (`infra/prometheus/rules/recorder.yml`, with a promtool test in CI): `RecordingLagging`
 when md.level2's lag is over 120 s **and** md.level2 has unread records, for 5 minutes. Only

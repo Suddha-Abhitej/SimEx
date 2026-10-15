@@ -286,13 +286,29 @@ def expired_days(
     return found
 
 
-def apply_retention(root: Path, now: datetime, keep_days: int, require_archived: bool) -> int:
-    deleted = 0
+@dataclass(frozen=True)
+class RetentionResult:
+    deleted: int  # date directories removed
+    failed: int  # date directories that couldn't be removed this pass; retried on the next
+
+
+def apply_retention(
+    root: Path, now: datetime, keep_days: int, require_archived: bool
+) -> RetentionResult:
+    """Delete expired date directories. A directory that can't be deleted (on Windows, a file
+    held open by a DuckDB query or an Explorer preview raises PermissionError) is logged and
+    left for the next pass: cleanup never stops recording."""
+    deleted = failed = 0
     for path, verdict in expired_days(root, now, keep_days, require_archived):
-        if verdict == "deleted":
+        if verdict != "deleted":
+            log.warning("retention: %s %s (RECORDER_REQUIRE_ARCHIVED=1)", path, verdict)
+            continue
+        try:
             shutil.rmtree(path)
+        except OSError as exc:
+            failed += 1
+            log.warning("retention: cannot delete %s (%r); retrying on the next pass", path, exc)
+        else:
             deleted += 1
             log.info("retention: deleted %s", path)
-        else:
-            log.warning("retention: %s %s (RECORDER_REQUIRE_ARCHIVED=1)", path, verdict)
-    return deleted
+    return RetentionResult(deleted, failed)

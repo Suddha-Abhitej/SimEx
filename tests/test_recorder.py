@@ -440,12 +440,71 @@ def test_retention_keeps_recent_days_and_waits_for_the_archive_when_asked(tmp_pa
         f"date={now - timedelta(days=31):%Y-%m-%d}": "kept: not archived yet",
         f"date={now - timedelta(days=40):%Y-%m-%d}": "deleted",
     }
-    assert apply_retention(root, now, 30, require_archived=False) == 2
+    assert apply_retention(root, now, 30, require_archived=False).deleted == 2
     left = sorted(p.name for p in (root / "venue=gemini" / "channel=level2").iterdir())
     assert len(left) == 3
     # Today and yesterday survive even a retention of 0 days.
-    assert apply_retention(root, now, 0, require_archived=False) == 1
+    assert apply_retention(root, now, 0, require_archived=False).deleted == 1
     assert len(list((root / "venue=gemini" / "channel=level2").iterdir())) == 2
+
+
+def test_a_directory_that_cannot_be_deleted_is_retried_and_recording_goes_on(
+    tmp_path, monkeypatch, caplog
+):
+    """On Windows a file held open (a DuckDB query, an Explorer preview) makes rmtree raise
+    PermissionError. The other expired days are still deleted, the service keeps recording, and
+    the stuck day goes on the next pass."""
+    kafka, clock = loaded(), Clock(FEED_END_NS + 3600 * SECOND)
+    now = datetime.fromtimestamp(clock.now_ns / 1e9, UTC)
+    root = tmp_path / "rec"
+    expired = []
+    for days_ago in (31, 32, 33):
+        day = (
+            root
+            / "venue=gemini"
+            / "channel=level2"
+            / f"date={now - timedelta(days=days_ago):%Y-%m-%d}"
+        )
+        (day / "hour=00" / "product=BTC-USD").mkdir(parents=True)
+        expired.append(day)
+    stuck = expired[1]
+    real_rmtree = files.shutil.rmtree
+    held_open = {"yes": True}
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path) == stuck and held_open["yes"]:
+            raise PermissionError(13, "The process cannot access the file", str(path))
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(files.shutil, "rmtree", rmtree)
+    recorder, metrics = make(tmp_path, kafka, clock)
+
+    async def startup_and_record():
+        await recorder.start()  # retention runs at startup: must not raise
+        while await recorder.step(0):
+            pass
+
+    with caplog.at_level(logging.WARNING, logger="simex.recorder.files"):
+        asyncio.run(startup_and_record())
+    assert [day.exists() for day in expired] == [False, True, False]
+    assert metrics.registry.get_sample_value("simex_recorder_retention_errors_total") == 1
+    assert metrics.registry.get_sample_value("simex_recorder_retention_deleted_days_total") == 2
+    assert "cannot delete" in caplog.text and "retrying on the next pass" in caplog.text
+
+    # Recording went on through the failure: every record is on disk once.
+    async def finish():
+        await recorder.close()
+
+    asyncio.run(finish())
+    assert_exactly_once(root, kafka)
+
+    # The file is closed; the next hourly pass deletes the day.
+    held_open["yes"] = False
+    clock.now_ns += 3601 * SECOND
+    asyncio.run(recorder.housekeeping())
+    assert not stuck.exists()
+    assert metrics.registry.get_sample_value("simex_recorder_retention_deleted_days_total") == 3
+    assert metrics.registry.get_sample_value("simex_recorder_retention_errors_total") == 1
 
 
 def test_recordings_are_never_committed():
