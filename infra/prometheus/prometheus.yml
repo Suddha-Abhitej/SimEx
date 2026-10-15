@@ -5,4 +5,8 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
-  # SimEx services (ingestor, gateway, matching engine) are added here as they are built.
+  # The ingestor runs on the host during development (make ingest).
+  - job_name: simex-ingest
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+  # SimEx services (gateway, matching engine) are added here as they are built.
