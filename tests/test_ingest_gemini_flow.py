@@ -258,3 +258,43 @@ def test_a_lost_snapshot_on_connect_forces_a_reconnect():
     assert sample(metrics, "simex_ingest_reconnects_total", reason="resync_timeout") == 1
     snapshots = [r["product_id"] for r in records(producer, "md.level2") if r.get("snapshot")]
     assert snapshots.count("SOL-USD") == 1 and snapshots.count("BTC-USD") == 2
+
+
+def test_trade_silence_never_makes_the_connection_stale():
+    # Gemini pairs can go minutes without a trade (212 s measured): only level2 and pings count.
+    fake = FakeGemini()
+
+    async def script(ingestor, producer, metrics):
+        for _ in range(12):  # 1.2 s of depth diffs, no trades at all, stale window 0.4 s
+            await fake.update("BTC-USD")
+            await asyncio.sleep(0.1)
+        assert ingestor._seconds_since_message(("BTC-USD", "market_trades")) > 0.4
+
+    _, _, metrics = asyncio.run(
+        run_against(fake, script, ping_interval_seconds=0, stale_after_seconds=0.4)
+    )
+    assert fake.connections == 1
+    assert sample(metrics, "simex_ingest_reconnects_total", reason="stale") == 0
+
+
+def test_trades_alone_do_not_keep_a_dead_depth_stream_alive():
+    fake = FakeGemini()
+
+    reconnected_while_trading = []
+
+    async def script(ingestor, producer, metrics):
+        # No depth diffs and no pings, while a trade arrives every 0.1 s (well inside the 0.4 s
+        # stale window): the trades must not hide the dead depth stream.
+        for _ in range(30):
+            await fake.trade("ETH-USD")
+            await asyncio.sleep(0.1)
+            if fake.connections >= 2:
+                reconnected_while_trading.append(True)
+                break
+
+    _, producer, metrics = asyncio.run(
+        run_against(fake, script, ping_interval_seconds=0, stale_after_seconds=0.4)
+    )
+    assert reconnected_while_trading
+    assert sample(metrics, "simex_ingest_reconnects_total", reason="stale") >= 1
+    assert records(producer, "md.trades")  # the trades themselves were still published

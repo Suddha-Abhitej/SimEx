@@ -84,7 +84,8 @@ Drift kinds are counted in `simex_ingest_protocol_drift_total` and
 logged as errors; all but `stale_after_snapshot` should stay at 0.
 
 **Strict, not tolerant.** The rule tolerates nothing the probe didn't see, so a protocol change
-shows up as a gap or a drift alarm instead of a silently wrong book. Five minutes of data is the
+shows up as a gap or a drift alarm instead of a silently wrong book. The probe's five minutes and
+the ingestor's ten-minute live run (below: 0 gaps, no drift beyond `stale_after_snapshot`) are the
 evidence so far; **the rule gets its real proof in the week-1 24-hour run** (0 unrecovered gaps,
 drift counters at 0). If that run shows overlaps are normal, this ADR is revisited.
 
@@ -93,13 +94,21 @@ is a known limit: only disconnects are recorded as possible trade loss. Consumer
 trade ID and assume no order (`simex.marketdata.TradeDeduper`).
 
 **Liveness.** Gemini has no heartbeats channel. The ingestor sends a `ping` request every
-`INGEST_PING_INTERVAL_SECONDS` (2 s) and treats `INGEST_STALE_AFTER_SECONDS` (5 s, now the
-default for every venue) with no message of any kind as a stale socket. A healthy connection is
-never quiet that long, so a missing reply (lost, or dropped by the fault injector) needs no
-separate timeout. `simex_ingest_ping_rtt_seconds` reports the round trip.
+`INGEST_PING_INTERVAL_SECONDS` (2 s) and reconnects after `INGEST_STALE_AFTER_SECONDS` (5 s, now
+the default for every venue) without a sign of life. **Only level2 messages, ping replies and
+other control frames count; trades never do**, either way: Gemini pairs went 38 s (BTC), 96 s
+(SOL) and 212 s (ETH) without a trade in the live runs, so trade silence must not trip the
+timer, and a trickle of trades must not hide a dead depth stream (both are tested; Coinbase's
+heartbeats count as control frames). Level2 diffs arrive about every 100 ms and the longest
+silence measured was 1 s, so a healthy connection is never quiet for 5 s and a lost ping reply
+needs no separate timeout. `simex_ingest_ping_rtt_seconds` reports the round trip. The same rule
+holds downstream: stale-data guards use the level2 age from
+`simex_ingest_last_message_age_seconds`, never the `market_trades` age.
 
-**Defaults for the matching engine** (ADR 0005, to re-measure on the Oracle server): anti-cheat
-delay **200 ms**, which covers the 155 ms p99 depth lag; stale-data threshold 5 s.
+**Defaults for the matching engine** (ADR 0005): anti-cheat delay **200 ms**, which covers the
+155 ms p99 depth lag, and stale-data threshold 5 s. The lag was measured on a laptop whose clock
+was about 0.5 s behind and drifting, corrected by an NTP offset taken separately; **both values
+are to be re-measured on the Oracle server with a synced clock.**
 
 ## Consequences
 
@@ -119,3 +128,23 @@ delay **200 ms**, which covers the 155 ms p99 depth lag; stale-data threshold 5 
   it is a follow-up, not part of this decision.
 - If Gemini changes its snapshot or ID semantics, the drift alarms and the gap-rate alarm
   (ADR 0008) are what catch it.
+
+## Measured
+
+Live validation on 2026-10-15 from a Windows laptop against the local Docker stack, with the
+md.* topics deleted first so no Coinbase data remained in them:
+
+| Run | Result |
+| --- | --- |
+| Normal, 10 min | 16,787 level2 messages (28 msg/s), 84 trades. 0 gaps, 0 resyncs, 0 reconnects, 0 exchange errors, `awaiting_snapshot` 0 for every pair. Drift: only `stale_after_snapshot`, once per product (right after the initial snapshot). Ping round trip 78 ms. |
+| `SIMEX_INGEST_DROP_EVERY=500`, 5 min | 22 injected drops, 22 injected gaps, 22 single-product resubscribes. Recovery 72 to 435 ms, mean 161 ms. 0 reconnects, 0 suppressed resyncs, 0 feed gaps, `awaiting_snapshot` 0 at the end; 20 level2 updates flagged `awaiting_snapshot` while books resynced. Drift: `stale_after_snapshot` only (BTC 4, SOL 2). |
+| `INGEST_SNAPSHOT_REFRESH_SECONDS=90`, about 3.5 min | 6 refreshes, 2 per product, all completed, 30 s apart in order BTC, ETH, SOL. Mean refresh time BTC 156 ms, ETH 109 ms, SOL 78 ms. No timeouts, no reconnects. |
+
+**Compared with Coinbase** (ADR 0008): a Coinbase resync took 0.6 to 1.0 s and invalidated all
+three books, because its sequence counter is per connection. On Gemini a resync took about
+0.16 s on average and invalidated only the product whose chain broke; the other books never
+stopped. A Gemini snapshot is also 47 to 142 KB, against several MB on Coinbase.
+
+Feed lag from these runs is not usable (the laptop clock was about 0.5 s behind, so raw lag read
+about -540 ms); the corrected figures above come from the probe. Lag is to be re-measured on the
+Oracle server with a synced clock.
