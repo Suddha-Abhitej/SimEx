@@ -1,0 +1,33 @@
+# The week-1 book audit gate (ADR 0012): 0 mismatches, and at least 10 aligned audits per
+# product per hour. About a third of Gemini audits land inside a 100 ms diff and can't be aligned,
+# so the normal rate is about 19 aligned per product per hour (30 requested); under 10 means the
+# audit itself has stopped working, which the mismatch count alone would never show.
+groups:
+  - name: simex-book-audit
+    rules:
+      - alert: BookAuditMismatch
+        expr: sum by (venue, product_id) (increase(simex_book_audits_total{outcome="mismatch"}[1h])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.product_id }} book failed an audit in the last hour"
+          description: >-
+            The book differed from the venue's own top 100 levels at the same update ID.
+            The book service logged the first differing level ("failed its audit").
+
+      - alert: BookAuditsNotAligning
+        # Products with no aligned audit at all still count, as 0, through simex_book_state.
+        # `for: 1h` keeps a fresh start (counters at 0) from firing while the first hour fills.
+        expr: >-
+          (
+            sum by (venue, product_id) (increase(simex_book_audits_total{reason="aligned"}[1h]))
+            or sum by (venue, product_id) (simex_book_state) * 0
+          ) < 10
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.product_id }}: {{ $value | printf \"%.0f\" }} aligned audits in the last hour (gate: 10)"
+          description: >-
+            Check simex_ingest_audits_total{outcome=~"requested|skipped_not_synced|unaligned_.*"}
+            on the ingestor: requests not sent, books not synced, or answers that no longer align.

@@ -4,6 +4,6 @@ Consumers (order book, matching engine, recorder replay) read envelopes through 
 parse a venue's payload themselves, so nothing downstream depends on which exchange sent it.
 """
 
-from .decode import BookUpdate, ResyncMarker, Trade, TradeDeduper, decode
+from .decode import BookAudit, BookUpdate, ResyncMarker, Trade, TradeDeduper, decode
 
-__all__ = ["BookUpdate", "ResyncMarker", "Trade", "TradeDeduper", "decode"]
+__all__ = ["BookAudit", "BookUpdate", "ResyncMarker", "Trade", "TradeDeduper", "decode"]

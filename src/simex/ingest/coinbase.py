@@ -88,6 +88,7 @@ class CoinbaseAdapter:
     default_url = DEFAULT_URL
     channels = SUBSCRIBE_CHANNELS
     gap_channels = SUBSCRIBE_CHANNELS  # a per-connection counter can't say which was hit
+    supports_audit = False
 
     def __init__(self, pairs: tuple[str, ...], injector: FaultInjector | None = None) -> None:
         self.pairs = pairs
@@ -112,6 +113,9 @@ class CoinbaseAdapter:
 
     def ping_frame(self) -> str | None:
         return None  # the heartbeats channel keeps traffic flowing
+
+    def audit_frame(self, product: str) -> str | None:
+        return None  # no depth request at an exact sequence number: no audit
 
     def note_dropped(self, message: dict) -> None:
         sequence_num = message.get("sequence_num")

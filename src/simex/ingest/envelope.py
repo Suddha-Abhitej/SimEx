@@ -6,8 +6,9 @@ strings the venue sent and no value ever passes through a float.
 
 Version 2 added "type": "data" for market data and "resync" for the markers published on the
 level2 topic after a gap. Version 3 adds "venue", and on level2 "snapshot" (this message is a
-full book) and "update_ids" (the venue's [first, last] update IDs, or null). Consumers must skip
-types they don't know and should read payloads through simex.marketdata.decode.
+full book) and "update_ids" (the venue's [first, last] update IDs, or null). Type "audit"
+(ADR 0012) carries a venue's top levels at an exact update ID. Consumers must skip types they
+don't know and should read payloads through simex.marketdata.decode.
 
 Gemini, the live venue, publishes to md.*. Any other venue publishes to research.<venue>.md.*,
 so research data (Coinbase, ADR 0010) can't reach the book or matching engine by mistake.
@@ -168,6 +169,45 @@ def build_resync_marker(
         channel=LEVEL2,
         product_id=product_id,
         received_at_ns=detected_at_ns,
+        exchange_ts_ns=None,
+        sequence_num=None,
+    )
+
+
+def build_audit_envelope(
+    raw: str | bytes,
+    *,
+    product_id: str,
+    update_id: int,
+    aligned: bool,
+    reason: str,
+    received_at_ns: int,
+    venue: str,
+    topics: Topics,
+) -> Envelope:
+    """A book audit on the level2 topic (ADR 0012): the venue's top levels at update_id, with
+    the venue's response spliced in byte for byte. Only an aligned audit sits right after the
+    message whose last update ID is update_id; books count unaligned ones as unaligned."""
+    fields = _header(
+        type="audit",
+        venue=venue,
+        received_at_ns=received_at_ns,
+        exchange_ts_ns=None,
+        channel=LEVEL2,
+        product_id=product_id,
+        sequence_num=None,
+        update_id=update_id,
+        aligned=aligned,
+        reason=reason,
+    )
+    raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8")
+    return Envelope(
+        topic=topics.level2,
+        key=product_id.encode(),
+        value=fields[:-1] + b',"payload":' + raw_bytes + b"}",
+        channel=LEVEL2,
+        product_id=product_id,
+        received_at_ns=received_at_ns,
         exchange_ts_ns=None,
         sequence_num=None,
     )

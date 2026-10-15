@@ -17,6 +17,7 @@ from prometheus_client import start_http_server
 from .backoff import Backoff
 from .client import Ingestor
 from .config import Settings
+from .control import consume_resync_requests, ensure_control_topic
 from .envelope import Topics
 from .kafka import (
     create_producer,
@@ -92,11 +93,32 @@ async def main() -> None:
         )
     producer = await connect_kafka(settings, ingestor.topics, ingestor.adapter.channels)
     ingestor.producer = producer
+    requests = asyncio.create_task(resync_requests_forever(settings, ingestor))
     try:
         await ingestor.run()
     finally:
+        requests.cancel()
+        await asyncio.gather(requests, return_exceptions=True)
         log.info("shutting down; flushing Kafka producer")
         await producer.stop()
+
+
+async def resync_requests_forever(settings: Settings, ingestor: Ingestor) -> None:
+    """Serve the books' resync requests (ctl.resync_requests, ADR 0012); retry if Kafka drops."""
+    backoff = Backoff(settings.backoff_initial_seconds, settings.backoff_max_seconds)
+    while True:
+        try:
+            await ensure_control_topic(
+                settings.kafka_bootstrap_servers, settings.topic_replication_factor
+            )
+            log.info("serving resync requests from the book service")
+            await consume_resync_requests(settings.kafka_bootstrap_servers, ingestor.request_resync)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # aiokafka raises several unrelated types when Kafka is down
+            delay = backoff.next_delay()
+            log.warning("resync request consumer stopped (%r); retrying in %.1fs", exc, delay)
+            await asyncio.sleep(delay)
 
 
 def run() -> None:

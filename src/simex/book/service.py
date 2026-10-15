@@ -8,6 +8,9 @@
   ID, so nothing is parsed) to that product's queue, and one asyncio task per product decodes and
   applies it. Order within a product is the partition's order.
 - Every publish interval, each book's top levels and state go to Valkey with a TTL.
+- Audits (ADR 0012) arrive in-band on md.level2 and each book checks itself against them. A book
+  that is crossed or fails an audit drops to RESYNCING and asks the ingestor for a fresh snapshot
+  on ctl.resync_requests, once per product until it is SYNCED again.
 """
 
 from __future__ import annotations
@@ -30,7 +33,25 @@ from .source import Level2Source, plan_start_offsets
 log = logging.getLogger(__name__)
 
 INF = float("inf")
-RESYNC_REASONS = {Outcome.RESYNC: "marker", Outcome.CROSSED: "crossed"}
+RESYNC_REASONS = {
+    Outcome.RESYNC: "marker",
+    Outcome.CROSSED: "crossed",
+    Outcome.AUDIT_MISMATCH: "audit_mismatch",
+}
+AUDIT_OUTCOMES = {
+    Outcome.AUDIT_MATCH: "match",
+    Outcome.AUDIT_MISMATCH: "mismatch",
+    Outcome.AUDIT_SKIPPED: "skipped",
+    Outcome.AUDIT_UNALIGNED: "unaligned",
+}
+# A book in this state can't fix itself: ask the ingestor for a fresh snapshot.
+REQUEST_RESYNC = {Outcome.CROSSED: "crossed", Outcome.AUDIT_MISMATCH: "audit_mismatch"}
+
+
+class Requester(Protocol):
+    """Where resync requests go (simex.ingest.control.KafkaResyncRequester in production)."""
+
+    async def send(self, venue: str, product_id: str, reason: str) -> Any: ...
 
 
 class Store(Protocol):
@@ -47,12 +68,16 @@ class BookService:
         store: Store,
         metrics: BookMetrics,
         *,
+        requester: Requester | None = None,
         clock_ns: Callable[[], int] = time.time_ns,
     ) -> None:
         self.settings = settings
         self.source = source
         self.store = store
         self.metrics = metrics
+        self.requester = requester
+        self.requests: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+        self.requested: set[str] = set()  # products with a request out, until SYNCED again
         self._clock_ns = clock_ns
         self.books = {p: OrderBook(settings.venue, p) for p in settings.pairs}
         self.queues: dict[str, asyncio.Queue[bytes]] = {p: asyncio.Queue() for p in settings.pairs}
@@ -187,12 +212,33 @@ class BookService:
             if (event.venue, event.product_id) != (venue, product):
                 continue  # not this book's (a record keyed differently from its envelope)
             outcome = book.apply(event)
-            self.metrics.updates.labels(venue, product, str(outcome)).inc()
+            if audit := AUDIT_OUTCOMES.get(outcome):
+                self.metrics.audits.labels(venue, product, audit, event.reason or "unknown").inc()
+            else:
+                self.metrics.updates.labels(venue, product, str(outcome)).inc()
+            if outcome is Outcome.SNAPSHOT:
+                self.requested.discard(product)  # a new request may go out if it fails again
             if reason := RESYNC_REASONS.get(outcome):
                 self.metrics.resyncs.labels(venue, product, reason).inc()
                 if outcome is Outcome.CROSSED:
                     self.metrics.crossed.labels(venue, product).inc()
-                    log.error("%s book crossed after a message; waiting for a snapshot", product)
+                    log.error("%s book crossed after a message", product)
+                elif outcome is Outcome.AUDIT_MISMATCH:
+                    log.error(
+                        "%s book failed its audit at update %s (%s)",
+                        product,
+                        book.last_update_id,
+                        book.audit_mismatch,
+                    )
+            if (why := REQUEST_RESYNC.get(outcome)) and product not in self.requested:
+                if self.catching_up(product):
+                    # History: the ingestor has resynced since, and the snapshot that fixed it
+                    # follows in the log. Asking now would only resubscribe a healthy stream.
+                    log.info("%s: replayed from history; no resync request", product)
+                else:
+                    log.warning("%s: asking the ingestor for a resync (%s)", product, why)
+                    self.requested.add(product)
+                    self.requests.put_nowait((product, why))
             received = getattr(event, "received_at_ns", None)
             if outcome in (Outcome.APPLIED, Outcome.SNAPSHOT) and received is not None:
                 lag = (self._clock_ns() - received) / 1e9
@@ -255,10 +301,25 @@ class BookService:
 
     # Run ---------------------------------------------------------------------------------------
 
+    async def request_forever(self) -> None:
+        """Send resync requests to the ingestor (ctl.resync_requests)."""
+        while True:
+            product, reason = await self.requests.get()
+            if self.requester is None:
+                continue
+            try:
+                await self.requester.send(self.settings.venue, product, reason)
+            except Exception as exc:  # the book still recovers at the next refresh
+                log.warning("cannot send the %s resync request: %r", product, exc)
+                self.requested.discard(product)
+                continue
+            self.metrics.resync_requests.labels(self.settings.venue, product, reason).inc()
+
     async def run(self) -> None:
         await self.start()
         tasks = [asyncio.create_task(self.work(p), name=f"book-{p}") for p in self.books]
         tasks.append(asyncio.create_task(self.publish_forever(), name="publish"))
+        tasks.append(asyncio.create_task(self.request_forever(), name="requests"))
         tasks.append(asyncio.create_task(self.dispatch_forever(), name="dispatch"))
         try:
             await asyncio.gather(*tasks)

@@ -11,6 +11,11 @@ Snapshot refresh (ADR 0009): venues only send snapshots on subscribe or resync, 
 also resyncs one product at a time on a schedule, giving the level2 topic a recent snapshot for
 every product that a book builder can cold-start from. Refreshes are staggered so at most one book
 is resyncing, share the rate limiter with gap resyncs, and give way to a gap or disconnect.
+
+Book audit (ADR 0012): on venues that support it, the client asks for one product's top levels at
+an exact update ID every INGEST_AUDIT_SECONDS / pairs and publishes the answer in-band on the
+level2 topic, right after the message it matches (simex.ingest.audit). Books that find themselves
+wrong ask for a resync on ctl.resync_requests; request_resync() runs it like a gap's.
 """
 
 from __future__ import annotations
@@ -27,12 +32,15 @@ from typing import Any, Protocol
 import websockets
 from aiokafka.errors import KafkaError
 
+from .audit import AuditAligner, AuditResponse, Release
 from .backoff import Backoff
 from .coinbase import CoinbaseAdapter
 from .config import Settings
+from .control import ResyncRequest
 from .envelope import (
     GAPS_KEY,
     Envelope,
+    build_audit_envelope,
     build_envelope,
     build_gap_record,
     build_resync_marker,
@@ -41,7 +49,7 @@ from .envelope import (
 from .gemini import GeminiAdapter
 from .metrics import IngestMetrics
 from .resync import FaultInjector, GapRateMonitor, RateLimiter
-from .venue import HEARTBEATS, TRADES, Anomaly, Parsed, VenueAdapter
+from .venue import HEARTBEATS, LEVEL2, TRADES, Anomaly, Parsed, VenueAdapter
 
 log = logging.getLogger(__name__)
 
@@ -123,6 +131,9 @@ class Ingestor:
         metrics.bind(self.venue)
         self.url = settings.ws_url or self.adapter.default_url
         self.limiter = RateLimiter(settings.resync_min_interval_seconds, monotonic)
+        self.aligner = AuditAligner(settings.audit_hold_seconds, monotonic)
+        self.next_audit_at: float | None = None  # None: audits off or unsupported
+        self._audit_turn = 0
         self.gap_rate = GapRateMonitor(monotonic)
         self._last_gap_alarm: float | None = None
 
@@ -255,6 +266,8 @@ class Ingestor:
             self.next_ping_at = now + self.settings.ping_interval_seconds
             self.unsynced_on_connection = set(self.settings.pairs)
             self.connect_snapshot_deadline = now + self.settings.resync_timeout_seconds
+            if self.settings.audit_seconds > 0 and self.adapter.supports_audit:
+                self.next_audit_at = now + self._audit_stagger
             for frame in self.adapter.connect_frames():
                 await ws.send(frame)
             log.info(
@@ -277,6 +290,7 @@ class Ingestor:
                 await self._drive_resync(ws)
                 await self._drive_refresh(ws)
                 await self._drive_ping(ws)
+                await self._drive_audit(ws)
 
     def _next_timeout(self, last_message: float) -> float:
         now = self._mono()
@@ -291,6 +305,10 @@ class Ingestor:
             deadlines.append(refresh_at)
         if self._pings_enabled and self.next_ping_at is not None:
             deadlines.append(self.next_ping_at)
+        if self.next_audit_at is not None:
+            deadlines.append(self.next_audit_at)
+        if (held_until := self.aligner.next_deadline()) is not None:
+            deadlines.append(held_until)
         return max(0.001, min(deadlines) - now)
 
     async def _send_frames(self, ws: Any, frames: list[str]) -> None:
@@ -307,7 +325,8 @@ class Ingestor:
                 "resync: unsubscribing and resubscribing level2 for %s", ", ".join(products)
             )
             await self._send_frames(ws, self.adapter.resync_frames(products))
-            self.metrics.resyncs.labels("resubscribe", "gap").inc()
+            trigger = self.resync.trigger if self.resync is not None else "gap"
+            self.metrics.resyncs.labels("resubscribe", trigger).inc()
             if self.resync is not None:
                 self.resync.method = "resubscribe"
                 self.resync.resubscribed_at = self._mono()
@@ -423,6 +442,11 @@ class Ingestor:
         if parsed.pong:
             self._on_pong()
             return []
+        if parsed.audit is not None:
+            product, update_id = parsed.audit
+            response = AuditResponse(product, update_id, raw, received_at_ns)
+            await self._publish_audits(self.aligner.on_response(response))
+            return []
         if parsed.subscribed:
             self.metrics.connected.set(1)
             log.info("subscriptions confirmed by %s", self.venue)
@@ -476,9 +500,14 @@ class Ingestor:
             log.debug("message carries %d products; published once per product", len(envelopes))
 
         now = self._mono()
-        for envelope in envelopes:
+        for item, envelope in zip(parsed.items, envelopes, strict=True):
             self.last_message[(envelope.product_id, envelope.channel)] = now
             await self._publish(envelope)
+            if item.channel == LEVEL2 and item.update_ids is not None:
+                # An audit waiting for this message goes right behind it (ADR 0012).
+                await self._publish_audits(
+                    self.aligner.on_level2(item.product_id, *item.update_ids)
+                )
         if self.resync is not None and not self.awaiting:
             self._complete_resync()
         return envelopes
@@ -542,38 +571,7 @@ class Ingestor:
 
         detected_at_ns = self._clock_ns()
         products = anomaly.products
-        self._supersede_refresh()
-        # The resync in flight still delivers valid snapshots for books it hasn't recovered yet,
-        # so another resubscribe is only needed for books that had already recovered.
-        in_flight = self.resync is not None and self.resync.resubscribed_at is not None
-        needs_resubscribe = not in_flight or bool(set(products) - self.awaiting)
-        if self.resync is None:
-            self.resync = Resync(
-                id=uuid.uuid4().hex,
-                trigger="gap",
-                started_mono=self._mono(),
-                method="resubscribe",
-                products=products,
-            )
-        else:
-            merged = set(self.resync.products) | set(products)
-            self.resync.products = tuple(p for p in self.settings.pairs if p in merged)
-        if not needs_resubscribe:
-            action = "covered_by_resync_in_flight"
-        elif self.limiter.ready():
-            action = "resubscribe"
-        else:
-            action = "deferred"
-            self.metrics.resyncs_suppressed.inc()
-            log.info(
-                "resync rate limit: resubscribe deferred %.1fs",
-                self.limiter.ready_at() - self._mono(),
-            )
-        if needs_resubscribe:
-            self.resubscribe_wanted = True
-            self.resubscribe_products.update(products)
-
-        await self._invalidate_books(self.resync.id, anomaly.reason, detected_at_ns, products)
+        action = await self._start_resync(products, "gap", anomaly.reason, detected_at_ns)
         await self._publish_raw(
             self.topics.gaps,
             GAPS_KEY,
@@ -595,6 +593,106 @@ class Ingestor:
                 fault_injected=injected,
             ),
         )
+
+    async def _start_resync(
+        self, products: tuple[str, ...], trigger: str, reason: str, detected_at_ns: int
+    ) -> str:
+        """Invalidate these books and resubscribe their level2 for fresh snapshots, through the
+        rate limiter. Returns what was done: resubscribe, deferred, or covered by a resync
+        already in flight."""
+        self._supersede_refresh()
+        # The resync in flight still delivers valid snapshots for books it hasn't recovered yet,
+        # so another resubscribe is only needed for books that had already recovered.
+        in_flight = self.resync is not None and self.resync.resubscribed_at is not None
+        needs_resubscribe = not in_flight or bool(set(products) - self.awaiting)
+        if self.resync is None:
+            self.resync = Resync(
+                id=uuid.uuid4().hex,
+                trigger=trigger,
+                started_mono=self._mono(),
+                method="resubscribe",
+                products=products,
+            )
+        else:
+            merged = set(self.resync.products) | set(products)
+            self.resync.products = tuple(p for p in self.settings.pairs if p in merged)
+        if not needs_resubscribe:
+            action = "covered_by_resync_in_flight"
+        elif self.limiter.ready():
+            action = "resubscribe"
+        else:
+            action = "deferred"
+            self.metrics.resyncs_suppressed.inc()
+            log.info(
+                "resync rate limit: resubscribe deferred %.1fs",
+                self.limiter.ready_at() - self._mono(),
+            )
+        if needs_resubscribe:
+            self.resubscribe_wanted = True
+            self.resubscribe_products.update(products)
+        await self._invalidate_books(self.resync.id, reason, detected_at_ns, products)
+        return action
+
+    async def request_resync(self, request: ResyncRequest) -> str:
+        """A book asked for a fresh snapshot (ctl.resync_requests, ADR 0012). Deduplicated per
+        product: a book already waiting for a snapshot gets no second resync."""
+        product = request.product_id
+        if request.venue != self.venue or product not in self.settings.pairs:
+            outcome = "unknown"
+        elif product in self.awaiting or product in self.resubscribe_products:
+            outcome = "duplicate"
+        else:
+            outcome = "accepted"
+            log.warning("resync requested by the book service for %s (%s)", product, request.reason)
+            await self._start_resync((product,), "book_request", "book_request", self._clock_ns())
+        if outcome != "unknown":
+            self.metrics.resync_requests.labels(product, outcome).inc()
+        else:
+            log.warning("ignoring a resync request for %s/%s", request.venue, product)
+        return outcome
+
+    # Book audit --------------------------------------------------------------------------------
+
+    @property
+    def _audit_stagger(self) -> float:
+        return self.settings.audit_seconds / max(1, len(self.settings.pairs))
+
+    async def _drive_audit(self, ws: Any) -> None:
+        """Release held audits that timed out, and send the next depth request when due."""
+        await self._publish_audits(self.aligner.expire())
+        if self.next_audit_at is None or self._mono() < self.next_audit_at:
+            return
+        pairs = self.settings.pairs
+        product = pairs[self._audit_turn % len(pairs)]
+        self._audit_turn += 1
+        self.next_audit_at = self._mono() + self._audit_stagger
+        if product in self.awaiting:
+            self.metrics.audits.labels(product, "skipped_not_synced").inc()
+            return
+        frame = self.adapter.audit_frame(product)
+        if frame is None:
+            self.next_audit_at = None
+            return
+        self.metrics.audits.labels(product, "requested").inc()
+        await ws.send(frame)
+
+    async def _publish_audits(self, releases: list[Release]) -> None:
+        for release in releases:
+            audit = release.audit
+            await self._publish(
+                build_audit_envelope(
+                    audit.raw,
+                    product_id=audit.product,
+                    update_id=audit.update_id,
+                    aligned=release.aligned,
+                    reason=release.reason,
+                    received_at_ns=audit.received_at_ns,
+                    venue=self.venue,
+                    topics=self.topics,
+                )
+            )
+            outcome = "aligned" if release.aligned else f"unaligned_{release.reason}"
+            self.metrics.audits.labels(audit.product, outcome).inc()
 
     def _check_gap_rate(self) -> None:
         count = self.gap_rate.record()
@@ -632,6 +730,7 @@ class Ingestor:
                 )
             )
         self._set_awaiting(self.awaiting | set(products))
+        await self._publish_audits(self.aligner.on_resync(products))
 
     async def _on_disconnect(self, *, fallback: bool) -> None:
         """Anything sent while disconnected is lost: invalidate the books and record the gap."""

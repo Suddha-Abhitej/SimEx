@@ -52,6 +52,9 @@ class Parsed:
     subscribed: bool = False  # the venue confirmed our subscriptions
     pong: bool = False  # the answer to our liveness ping
     error: str | None = None  # the venue reported an error
+    # The answer to an audit_frame() request: (product, the update ID the levels are at).
+    # The raw message is published as the audit's payload (ADR 0012).
+    audit: tuple[str, int] | None = None
     invalid: str | None = None  # drop the message after its gap check, for this reason
 
 
@@ -62,6 +65,8 @@ class VenueAdapter(Protocol):
     channels: tuple[str, ...]
     # Channels a gap found by check() may have affected.
     gap_channels: tuple[str, ...]
+    # Whether audit_frame() works: the venue can return top levels at an exact update ID.
+    supports_audit: bool
 
     def reset(self) -> None:
         """Forget per-connection state; called before each new connection."""
@@ -74,6 +79,10 @@ class VenueAdapter(Protocol):
 
     def ping_frame(self) -> str | None:
         """An application-level ping to keep traffic flowing, or None if the venue has none."""
+
+    def audit_frame(self, product: str) -> str | None:
+        """A one-shot request for the product's top levels at an exact update ID (the book
+        audit, ADR 0012), or None if the venue has none."""
 
     def parse(self, message: dict) -> Parsed:
         """Read one decoded message, run the gap rule, and say what to publish."""

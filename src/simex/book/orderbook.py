@@ -10,6 +10,11 @@ States:
 - RESYNCING: a resync marker, a crossed book or a failed audit invalidated it; it waits for the
   next snapshot.
 
+Audits (ADR 0012): an aligned BookAudit carries the venue's own top levels at an update ID L. If
+the book is SYNCED at exactly L, its top levels must equal the venue's, price and size, as exact
+Decimals; a mismatch drops the book like a crossed one. Anything else proves nothing and is only
+counted (unaligned, or skipped when the book isn't at L).
+
 Rules: a snapshot replaces the whole book; a level's size is the full size at that price, and 0
 removes it; updates flagged awaiting_snapshot are skipped; updates while not SYNCED are skipped.
 The crossed check runs after a whole message (one BookUpdate) is applied, never mid-message,
@@ -28,10 +33,12 @@ from enum import StrEnum
 
 from sortedcontainers import SortedDict
 
-from simex.marketdata import BookUpdate, ResyncMarker
+from simex.marketdata import BookAudit, BookUpdate, ResyncMarker
 
 Level = tuple[Decimal, Decimal]  # (price, size)
 ZERO = Decimal(0)
+# Gemini's depth request returns this many levels a side; a side with fewer is the whole side.
+AUDIT_LEVELS = 100
 
 
 class BookState(StrEnum):
@@ -49,6 +56,10 @@ class Outcome(StrEnum):
     SKIPPED_NOT_SYNCED = "skipped_not_synced"  # an update while EMPTY or RESYNCING
     RESYNC = "resync"  # a resync marker: the book was dropped
     CROSSED = "crossed"  # the message left best bid >= best ask: the book was dropped
+    AUDIT_MATCH = "audit_match"  # the venue's top levels at last_update_id equal the book's
+    AUDIT_MISMATCH = "audit_mismatch"  # they differ: the book was dropped
+    AUDIT_SKIPPED = "audit_skipped"  # aligned, but the book isn't SYNCED at that update ID
+    AUDIT_UNALIGNED = "audit_unaligned"  # the ingestor couldn't place it: proves nothing
     IGNORED = "ignored"  # not a book event (trades)
 
 
@@ -85,6 +96,7 @@ class OrderBook:
         self.received_at_ns: int | None = None
         self.snapshot_received_at_ns: int | None = None
         self.crossed = 0  # times a message left the book crossed
+        self.audit_mismatch: str | None = None  # what differed in the last failed audit
 
     # Applying events ---------------------------------------------------------------------------
 
@@ -93,6 +105,9 @@ class OrderBook:
             self._check_product(event.venue, event.product_id)
             self._drop()
             return Outcome.RESYNC
+        if isinstance(event, BookAudit):
+            self._check_product(event.venue, event.product_id)
+            return self._audit(event)
         if not isinstance(event, BookUpdate):
             return Outcome.IGNORED
         self._check_product(event.venue, event.product_id)
@@ -122,6 +137,21 @@ class OrderBook:
             self._drop()
             return Outcome.CROSSED
         return outcome
+
+    def _audit(self, audit: BookAudit) -> Outcome:
+        self._check_product(audit.venue, audit.product_id)
+        if not audit.aligned:
+            return Outcome.AUDIT_UNALIGNED
+        if self.state is not BookState.SYNCED or self.last_update_id != audit.update_id:
+            return Outcome.AUDIT_SKIPPED
+        bids = sorted(audit.bids, key=lambda level: level[0], reverse=True)
+        asks = sorted(audit.asks, key=lambda level: level[0])
+        difference = _difference("bid", self.bids, bids) or _difference("ask", self.asks, asks)
+        if difference is None:
+            return Outcome.AUDIT_MATCH
+        self.audit_mismatch = difference
+        self._drop()
+        return Outcome.AUDIT_MISMATCH
 
     def invalidate(self) -> None:
         """Drop the book and wait for a snapshot (e.g. a failed audit)."""
@@ -207,6 +237,20 @@ class OrderBook:
             levels=touched,
             complete=remaining == ZERO,
         )
+
+
+def _difference(side: str, ours: SortedDict, theirs: list[Level]) -> str | None:
+    """How the book's best levels differ from the venue's, or None if they are equal."""
+    mine = ours.items()[: len(theirs)]
+    for i, (a, b) in enumerate(zip(mine, theirs, strict=False)):
+        if a != b:
+            return f"{side} level {i}: book {a[0]} x {a[1]}, venue {b[0]} x {b[1]}"
+    if len(mine) < len(theirs):
+        return f"{side}: book has {len(mine)} levels, venue {len(theirs)}"
+    if len(theirs) < AUDIT_LEVELS and len(ours) > len(theirs):
+        # The venue sent its whole side, so the book has levels the venue doesn't.
+        return f"{side}: book has {len(ours)} levels, venue's whole side is {len(theirs)}"
+    return None
 
 
 def _set(levels: SortedDict, updates: Iterable[Level]) -> None:

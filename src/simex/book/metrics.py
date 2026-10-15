@@ -31,6 +31,21 @@ class BookMetrics:
             [*labels, "outcome"],
             registry=r,
         )
+        self.audits = Counter(
+            "simex_book_audits",
+            "Book audits against the venue's own top levels (ADR 0012): outcome match, mismatch, "
+            "skipped (aligned but the book isn't SYNCED at that update) or unaligned; reason is "
+            "how the ingestor placed it (aligned, inside_diff, stream_past, timeout, resync, "
+            "superseded)",
+            [*labels, "outcome", "reason"],
+            registry=r,
+        )
+        self.resync_requests = Counter(
+            "simex_book_resync_requests",
+            "Resync requests sent to the ingestor on ctl.resync_requests, by reason",
+            [*labels, "reason"],
+            registry=r,
+        )
         self.crossed = Counter(
             "simex_book_crossed",
             "Messages that left the book crossed (best bid >= best ask); should stay 0",
@@ -39,7 +54,8 @@ class BookMetrics:
         )
         self.resyncs = Counter(
             "simex_book_resyncs",
-            "Times the book was dropped to wait for a snapshot (reason=marker|crossed)",
+            "Times the book was dropped to wait for a snapshot (reason=marker|crossed|"
+            "audit_mismatch)",
             [*labels, "reason"],
             registry=r,
         )

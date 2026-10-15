@@ -40,6 +40,8 @@ def scrape(url: str) -> list[str]:
         "simex_book_catching_up",
         "simex_book_valkey_errors_total",
         "simex_book_replayed_from_log_start_total",
+        "simex_book_audits_total",
+        "simex_book_resync_requests_total",
         "simex_book_apply_seconds_count",
         "simex_book_apply_seconds_sum",
     )

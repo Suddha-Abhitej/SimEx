@@ -31,3 +31,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate docker compose file
         run: docker compose config --quiet
+      - name: Check Prometheus config and alert rules
+        run: |
+          promtool() {
+            docker run --rm -v "$PWD/infra/prometheus:/etc/prometheus:ro" \
+              --entrypoint promtool prom/prometheus:v2.53.4 "$@"
+          }
+          promtool check config /etc/prometheus/prometheus.yml
+          promtool test rules /etc/prometheus/tests/book-audit.test.yml

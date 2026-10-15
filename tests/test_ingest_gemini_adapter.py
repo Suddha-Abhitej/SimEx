@@ -186,3 +186,22 @@ def test_a_dropped_diff_labels_its_gap_as_injected():
     adapter.note_dropped(lost)
     [gap] = adapter.parse(depth(L + 60, L + 80)).anomalies
     assert gap.kind == "gap" and gap.injected
+
+
+def test_audit_frame_and_its_depth_response():
+    adapter = synced()
+    assert adapter.supports_audit
+    frame = json.loads(adapter.audit_frame("ETH-USD"))
+    assert (frame["method"], frame["params"]) == ("depth", {"symbol": "ethusd"})
+    result = {"lastUpdateId": L + 9, "bids": [["20.00", "1"]], "asks": []}
+    parsed = adapter.parse({"id": frame["id"], "status": 200, "result": result})
+    assert parsed.audit == ("ETH-USD", L + 9) and parsed.error is None and not parsed.items
+    # The same id again is not an audit any more; a response without lastUpdateId is an error.
+    assert adapter.parse({"id": frame["id"], "status": 200, "result": result}).audit is None
+    frame = json.loads(adapter.audit_frame("BTC-USD"))
+    parsed = adapter.parse({"id": frame["id"], "status": 200, "result": {"bids": []}})
+    assert parsed.audit is None and "lastUpdateId" in parsed.error
+    # An error answer forgets the request.
+    frame = json.loads(adapter.audit_frame("SOL-USD"))
+    assert adapter.parse({"id": frame["id"], "status": 400, "error": "bad"}).error
+    assert frame["id"] not in adapter._audit_ids
