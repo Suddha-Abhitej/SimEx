@@ -67,9 +67,8 @@ Two facts shape the design:
   baseline is and when the last resync happened.
 - If Coinbase really moves to per-product counters, we would see false gaps and constant resyncs;
   the alarm is there to catch that.
-- **Measured:** a live 2-minute run with `SIMEX_INGEST_DROP_EVERY=500` produced 5 injected
-  gaps. All 5 recovered via resubscribe, with fresh snapshots for all three products in
-  690–850 ms (about 0.8 s), no reconnect fallbacks and no suppressed resyncs. 19 level2 updates
-  were flagged `awaiting_snapshot` during those windows. That confirms the resubscribe delivers a
-  new snapshot, so the reconnect stays a fallback. A normal 2-minute run had 0 gaps and
-  0 resyncs.
+- **Measured:** a live run of about 150 s with `SIMEX_INGEST_DROP_EVERY=500` produced 21
+  injected gaps. All 21 recovered via resubscribe, with fresh snapshots for all three products in
+  0.6–1.0 s, no reconnect fallbacks, no resync timeouts and no suppressed resyncs. That confirms
+  the resubscribe delivers a new snapshot, so the reconnect stays a fallback. A normal 2.5-minute
+  run, in a separate window, had 0 gaps and 0 resyncs.
