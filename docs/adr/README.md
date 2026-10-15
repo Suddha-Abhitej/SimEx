@@ -12,3 +12,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0005](0005-fills-at-arrival-with-anti-cheat-delay.md) | Fills at order arrival, with a stale-data guard and anti-cheat delay | Accepted |
 | [0006](0006-zero-cost-hosting-oracle-plus-home-archive.md) | $0 hosting: Oracle Always Free for production, home server for archive | Accepted |
 | [0007](0007-market-data-envelope-and-topics.md) | Market-data envelope and Kafka topics | Accepted |
+| [0008](0008-gap-resync-markers-and-gap-records.md) | Gap resync: in-band markers on md.level2, gap records on md.gaps | Proposed |
