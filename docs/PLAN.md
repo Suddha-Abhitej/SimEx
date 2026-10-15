@@ -30,6 +30,7 @@ Change any of these and the timeline moves.
 | Who runs agents | The user, on their side, with their own key | SimEx never executes strangers' code |
 | Money | Simulation only: no real orders, no copy-trading | Keeps it a benchmark, not financial advice |
 | Language and cloud | Python first, AWS | Strongest existing skills |
+| Infrastructure memory | Kafka 1.25 GB, Postgres 1 GB, Valkey 256 MB, Prometheus 512 MB (Grafana 256 MB, opt-in) | About 3 GB of a 12 GB ARM64 host, leaving room for the services |
 
 ## Scope
 
@@ -145,7 +146,7 @@ that must pass before the next phase starts.
 **Days 1–3 · Setup**
 
 - [ ] Repo, license, README skeleton, GitHub Actions
-- [ ] docker-compose: Kafka, Postgres, Redis, Prometheus, Grafana
+- [ ] docker-compose: Kafka, Postgres, Valkey, Prometheus, Grafana
 - [ ] Terraform for one EC2 host and an S3 bucket
 
 **Week 1 · Live data in**
