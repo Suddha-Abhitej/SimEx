@@ -68,7 +68,7 @@ def test_messages_reach_kafka_with_gap_detection():
             port = server.sockets[0].getsockname()[1]
             ingestor = make_ingestor(f"ws://127.0.0.1:{port}", producer, metrics)
             task = asyncio.create_task(ingestor.run())
-            await wait_until(lambda: len(producer.records) == 4)
+            await wait_until(lambda: len(producer.records) == 8)
             connected = sample(metrics, "simex_ingest_connected")
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -83,7 +83,20 @@ def test_messages_reach_kafka_with_gap_detection():
         ("md.level2", b"BTC-USD"),
         ("md.trades", b"ETH-USD"),
         ("md.heartbeats", b"heartbeat"),
+        # The gap before sequence 7: a resync marker per product, then the gap record...
         ("md.level2", b"BTC-USD"),
+        ("md.level2", b"ETH-USD"),
+        ("md.level2", b"SOL-USD"),
+        ("md.gaps", b"gap"),
+        # ...then the message that revealed the gap.
+        ("md.level2", b"BTC-USD"),
+    ]
+    assert [json.loads(v)["type"] for t, _, v in producer.records if t == "md.level2"] == [
+        "data",
+        "resync",
+        "resync",
+        "resync",
+        "data",
     ]
     trade = json.loads(producer.records[1][2])
     assert trade["payload"] == TRADES
@@ -92,9 +105,10 @@ def test_messages_reach_kafka_with_gap_detection():
     assert sample(metrics, "simex_ingest_messages_total", channel="level2") == 2
     assert sample(metrics, "simex_ingest_messages_total", channel="market_trades") == 1
     assert sample(metrics, "simex_ingest_messages_total", channel="heartbeats") == 1
-    assert sample(metrics, "simex_ingest_sequence_gaps_total", kind="gap") == 1
+    assert sample(metrics, "simex_ingest_gaps_total", kind="gap", cause="feed") == 1
     assert sample(metrics, "simex_ingest_missed_messages_total") == 3
-    assert sample(metrics, "simex_ingest_published_total", topic="md.level2") == 2
+    # Two data envelopes and three resync markers.
+    assert sample(metrics, "simex_ingest_published_total", topic="md.level2") == 5
     assert sample(metrics, "simex_ingest_feed_lag_seconds_count", channel="market_trades") == 1
     assert connected == 1
     assert sample(metrics, "simex_ingest_connected") == 0  # cleared once the task stops
