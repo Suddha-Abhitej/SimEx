@@ -50,7 +50,7 @@ class IngestMetrics:
         )
         self.resyncs = Counter(
             "simex_ingest_resyncs",
-            "Level2 resyncs started (method=resubscribe|reconnect, trigger=gap|disconnect)",
+            "Level2 resyncs started (method=resubscribe|reconnect, trigger=gap|disconnect|refresh)",
             ["method", "trigger"],
             registry=r,
         )
@@ -64,6 +64,26 @@ class IngestMetrics:
             "From gap detection until every product has a fresh snapshot, by final method",
             ["method"],
             buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0),
+            registry=r,
+        )
+        self.snapshot_refreshes = Counter(
+            "simex_ingest_snapshot_refreshes",
+            "Scheduled per-product snapshot refreshes that ended (outcome=completed|timeout, or "
+            "superseded by a gap or disconnect resync)",
+            ["product_id", "outcome"],
+            registry=r,
+        )
+        self.snapshot_refresh_duration = Histogram(
+            "simex_ingest_snapshot_refresh_duration_seconds",
+            "From a scheduled refresh's resync marker until the product's fresh snapshot",
+            ["product_id"],
+            buckets=(0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.5, 5.0, 10.0),
+            registry=r,
+        )
+        self.last_snapshot_refresh_duration = Gauge(
+            "simex_ingest_last_snapshot_refresh_duration_seconds",
+            "Recovery time of the product's latest completed snapshot refresh",
+            ["product_id"],
             registry=r,
         )
         # Not a staleness signal: Coinbase only sends snapshots on subscribe, so with no gaps this
