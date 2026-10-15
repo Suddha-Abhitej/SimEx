@@ -1,7 +1,7 @@
 # Local stack shortcuts for Windows (same targets as the Makefile).
-# Usage: .\scripts\dev.ps1 up | down | logs [service] | ps | smoke | ingest
+# Usage: .\scripts\dev.ps1 up | down | logs [service] | ps | smoke | ingest | book
 param(
-    [Parameter(Position = 0)][ValidateSet("up", "down", "logs", "ps", "smoke", "ingest")][string]$Command = "ps",
+    [Parameter(Position = 0)][ValidateSet("up", "down", "logs", "ps", "smoke", "ingest", "book")][string]$Command = "ps",
     [Parameter(Position = 1)][string]$Service
 )
 $ErrorActionPreference = "Stop"
@@ -14,5 +14,6 @@ switch ($Command) {
     "ps"    { docker compose ps }
     "smoke" { python scripts/smoke_test.py }
     "ingest" { python -m simex.ingest }
+    "book"   { python -m simex.book }
 }
 exit $LASTEXITCODE
