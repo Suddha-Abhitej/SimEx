@@ -1,1 +1,1 @@
-"""Coinbase market-data client: WebSocket subscriptions, sequence-gap detection, snapshot resync."""
+"""Market-data ingestor: venue adapters (Gemini live, Coinbase research), gap rules, resync."""

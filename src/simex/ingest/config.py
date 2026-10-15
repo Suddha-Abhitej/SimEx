@@ -1,4 +1,4 @@
-"""Ingestor settings, read from environment variables."""
+"""Ingestor settings, read from environment variables (see .env.example)."""
 
 from __future__ import annotations
 
@@ -6,20 +6,30 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-DEFAULT_WS_URL = "wss://advanced-trade-ws.coinbase.com"
 DEFAULT_PAIRS = ("BTC-USD", "ETH-USD", "SOL-USD")
+VENUES = ("gemini", "coinbase")
 
 
 @dataclass(frozen=True)
 class Settings:
-    ws_url: str = DEFAULT_WS_URL
+    # gemini is the live venue; coinbase is for feed research only (ADR 0010).
+    venue: str = "gemini"
+    # Coinbase's terms forbid using its data to benchmark AI agents: it only runs when this is
+    # set, and publishes to research.coinbase.md.* (ADR 0011).
+    coinbase_research: bool = False
+    # Empty means the adapter's default URL.
+    ws_url: str = ""
     pairs: tuple[str, ...] = DEFAULT_PAIRS
     kafka_bootstrap_servers: str = "127.0.0.1:9092"
     topic_partitions: int = 3
     topic_replication_factor: int = 1
     metrics_port: int = 9101
-    # No message at all (heartbeats arrive every second) for this long means the socket is stale.
-    stale_after_seconds: float = 10.0
+    # No level2 message, ping reply or control frame for this long means the socket is stale
+    # (longest level2 silence measured: 1 s). Trades never count: they can stop for minutes.
+    stale_after_seconds: float = 5.0
+    # Application-level ping on venues without a heartbeats channel (Gemini), so a healthy but
+    # quiet connection always has traffic and its round trip is measured. 0 means off.
+    ping_interval_seconds: float = 2.0
     backoff_initial_seconds: float = 1.0
     backoff_max_seconds: float = 60.0
     # At most one level2 resubscribe per this many seconds after gaps (ADR 0008).
@@ -37,6 +47,19 @@ class Settings:
     level2_retention_bytes: int = 2 * 1024**3
     # Dev-only fault injector: drop every Nth received message. 0 means off.
     drop_every: int = 0
+
+    def check(self) -> None:
+        """Refuse settings that break ADR 0010 or can't work."""
+        if self.venue not in VENUES:
+            raise ValueError(f"SIMEX_VENUE must be one of {', '.join(VENUES)}, not {self.venue!r}")
+        if self.venue == "coinbase" and not self.coinbase_research:
+            raise ValueError(
+                "SIMEX_VENUE=coinbase is for feed research only (ADR 0010): Coinbase data must "
+                "never feed agents, matching or scoring. Set SIMEX_COINBASE_RESEARCH=1 to run it; "
+                "it publishes to research.coinbase.md.*"
+            )
+        if not self.pairs:
+            raise ValueError("SIMEX_PAIRS is empty")
 
     @property
     def refresh_stagger_seconds(self) -> float:
@@ -57,8 +80,12 @@ class Settings:
             return value if value else str(default)
 
         pairs = tuple(p.strip().upper() for p in get("SIMEX_PAIRS", ",".join(d.pairs)).split(","))
+        venue = get("SIMEX_VENUE", d.venue).lower()
+        url_variable = "COINBASE_WS_URL" if venue == "coinbase" else "GEMINI_WS_URL"
         return cls(
-            ws_url=get("COINBASE_WS_URL", d.ws_url),
+            venue=venue,
+            coinbase_research=get("SIMEX_COINBASE_RESEARCH", "0").lower() in ("1", "true", "yes"),
+            ws_url=get(url_variable, d.ws_url),
             pairs=tuple(p for p in pairs if p),
             kafka_bootstrap_servers=get("KAFKA_BOOTSTRAP_SERVERS", d.kafka_bootstrap_servers),
             topic_partitions=int(get("INGEST_TOPIC_PARTITIONS", d.topic_partitions)),
@@ -67,6 +94,9 @@ class Settings:
             ),
             metrics_port=int(get("INGEST_METRICS_PORT", d.metrics_port)),
             stale_after_seconds=float(get("INGEST_STALE_AFTER_SECONDS", d.stale_after_seconds)),
+            ping_interval_seconds=float(
+                get("INGEST_PING_INTERVAL_SECONDS", d.ping_interval_seconds)
+            ),
             backoff_initial_seconds=float(
                 get("INGEST_BACKOFF_INITIAL_SECONDS", d.backoff_initial_seconds)
             ),

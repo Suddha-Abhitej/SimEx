@@ -1,10 +1,14 @@
 """Summarize what the ingestor published over the last N seconds, read back from Kafka.
 
 Reports messages per second per channel, feed lag p50/p99 (from the envelopes, exact), every
-gap recorded on md.gaps, how each resync recovered (from the md.level2 markers and snapshots),
-the ingestor's gap and resync counters (from its /metrics endpoint), and one md.trades message.
+gap recorded on the gaps topic, how each resync recovered (from the level2 markers and
+snapshots), and the ingestor's gap, resync, drift and ping counters (from its /metrics endpoint).
 
-Usage: python scripts/ingest_report.py --seconds 120 [--metrics-url http://127.0.0.1:9101/metrics]
+--venue picks the topics: gemini reads md.*, coinbase reads research.coinbase.md.* (ADR 0011).
+Nothing read from Kafka is written anywhere: this only prints counts, lags and gap records.
+
+Usage: python scripts/ingest_report.py --seconds 120 [--venue gemini]
+       [--metrics-url http://127.0.0.1:9101/metrics]
 """
 
 from __future__ import annotations
@@ -20,8 +24,7 @@ from collections import defaultdict
 from aiokafka import AIOKafkaConsumer, TopicPartition
 from aiokafka.admin import AIOKafkaAdminClient
 
-TOPICS = ("md.level2", "md.trades", "md.heartbeats", "md.gaps")
-DATA_TOPICS = TOPICS[:3]
+from simex.ingest.envelope import topics_for
 
 
 def percentile(sorted_values: list[float], fraction: float) -> float:
@@ -29,11 +32,11 @@ def percentile(sorted_values: list[float], fraction: float) -> float:
     return sorted_values[index]
 
 
-async def list_partitions(bootstrap: str) -> list[TopicPartition]:
+async def list_partitions(bootstrap: str, topics: list[str]) -> list[TopicPartition]:
     admin = AIOKafkaAdminClient(bootstrap_servers=bootstrap)
     await admin.start()
     try:
-        described = await admin.describe_topics(list(TOPICS))
+        described = await admin.describe_topics(topics)
     finally:
         await admin.close()
     return [
@@ -44,10 +47,12 @@ async def list_partitions(bootstrap: str) -> list[TopicPartition]:
     ]
 
 
-async def read_window(bootstrap: str, start_ms: int, end_ms: int) -> dict[str, list[dict]]:
-    partitions = await list_partitions(bootstrap)
+async def read_window(
+    bootstrap: str, topics: list[str], start_ms: int, end_ms: int
+) -> dict[str, list[dict]]:
+    partitions = await list_partitions(bootstrap, topics)
     if not partitions:
-        raise SystemExit(f"none of {', '.join(DATA_TOPICS)} exist yet; has the ingestor run?")
+        raise SystemExit(f"none of {', '.join(topics)} exist yet; has the ingestor run?")
     consumer = AIOKafkaConsumer(bootstrap_servers=bootstrap, enable_auto_commit=False)
     await consumer.start()
     try:
@@ -99,6 +104,12 @@ def scrape_gap_metrics(url: str) -> dict[str, float] | None:
         "simex_ingest_fault_injected_drops_total",
         "simex_ingest_time_since_last_snapshot_seconds",
         "simex_ingest_last_message_age_seconds",
+        "simex_ingest_awaiting_snapshot",
+        "simex_ingest_protocol_drift_total",
+        "simex_ingest_ping_rtt_seconds",
+        "simex_ingest_snapshot_refreshes_total",
+        "simex_ingest_last_snapshot_refresh_duration_seconds",
+        "simex_ingest_exchange_errors_total",
     )
     values: dict[str, float] = {}
     for line in text.splitlines():
@@ -113,6 +124,8 @@ def is_data(envelope: dict) -> bool:
 
 
 def is_snapshot(envelope: dict) -> bool:
+    if "snapshot" in envelope:  # envelope v3
+        return bool(envelope["snapshot"])
     events = (envelope.get("payload") or {}).get("events") or []
     return any(e.get("type") == "snapshot" for e in events if isinstance(e, dict))
 
@@ -162,17 +175,30 @@ def main() -> None:
     parser.add_argument(
         "--bootstrap", default=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "127.0.0.1:9092")
     )
+    parser.add_argument(
+        "--venue",
+        default=os.environ.get("SIMEX_VENUE", "gemini"),
+        help="gemini (md.*) or coinbase (research.coinbase.md.*)",
+    )
     port = os.environ.get("INGEST_METRICS_PORT", "9101")
     parser.add_argument("--metrics-url", default=f"http://127.0.0.1:{port}/metrics")
     args = parser.parse_args()
 
     end_ms = int(time.time() * 1000)
     start_ms = end_ms - int(args.seconds * 1000)
-    by_topic = asyncio.run(read_window(args.bootstrap, start_ms, end_ms))
+    topics = topics_for(args.venue)
+    data_topics = [topics.level2, topics.trades]
+    if args.venue == "coinbase":
+        data_topics.append(topics.heartbeats)
+    by_topic = asyncio.run(
+        read_window(args.bootstrap, [*data_topics, topics.gaps], start_ms, end_ms)
+    )
 
-    print(f"Window: last {args.seconds:.0f}s, read back from Kafka at {args.bootstrap}\n")
+    print(
+        f"Window: last {args.seconds:.0f}s of {args.venue}, read from Kafka at {args.bootstrap}\n"
+    )
     print(f"{'channel':<14} {'messages':>9} {'msg/s':>8} {'lag p50':>10} {'lag p99':>10}")
-    for topic in DATA_TOPICS:
+    for topic in data_topics:
         envelopes = [e for e in by_topic.get(topic, []) if is_data(e)]
         channel = envelopes[0]["channel"] if envelopes else topic
         lags = sorted(
@@ -184,16 +210,19 @@ def main() -> None:
         p99 = f"{percentile(lags, 0.99):.1f} ms" if lags else "-"
         rate = len(envelopes) / args.seconds
         print(f"{channel:<14} {len(envelopes):>9} {rate:>8.1f} {p50:>10} {p99:>10}")
-    print("(lag = local receive time minus Coinbase timestamp; needs an NTP-synced clock)")
+    print("(lag = local receive time minus the venue's timestamp; needs an NTP-synced clock)")
 
-    level2 = by_topic.get("md.level2", [])
-    gaps = by_topic.get("md.gaps", [])
+    level2 = by_topic.get(topics.level2, [])
+    gaps = by_topic.get(topics.gaps, [])
     flagged = sum(1 for e in level2 if is_data(e) and e.get("awaiting_snapshot"))
-    print(f"\nGaps recorded on md.gaps: {len(gaps)}")
+    print(f"\nGaps recorded on {topics.gaps}: {len(gaps)}")
     for gap in gaps:
         missing = gap["missing_messages"]
+        jump = gap.get("id_jump")
         print(
-            f"  {gap['reason']:<13} missing={'?' if missing is None else missing:<4} "
+            f"  {gap['reason']:<14} products={','.join(gap['products']):<23} "
+            f"missing={'?' if missing is None else missing:<4} "
+            f"id_jump={'-' if jump is None else jump:<6} "
             f"action={gap['resync_action']:<27} injected={gap['fault_injected']}"
         )
     outcomes = resync_outcomes(level2, gaps)
@@ -207,11 +236,6 @@ def main() -> None:
         print(f"  {args.metrics_url} not reachable (is the ingestor still running?)")
     for name, value in sorted((counters or {}).items()):
         print(f"  {name} = {value:g}")
-
-    trades = by_topic.get("md.trades", [])
-    if trades:
-        print("\nSample md.trades message:")
-        print(json.dumps(trades[-1], indent=2))
 
 
 if __name__ == "__main__":

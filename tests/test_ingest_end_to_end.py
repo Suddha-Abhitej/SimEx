@@ -22,8 +22,8 @@ class FakeProducer:
         return future
 
 
-def sample(metrics: IngestMetrics, name: str, **labels) -> float:
-    return metrics.registry.get_sample_value(name, labels or None) or 0.0
+def sample(metrics: IngestMetrics, name: str, venue: str = "coinbase", **labels) -> float:
+    return metrics.registry.get_sample_value(name, {"venue": venue, **labels}) or 0.0
 
 
 async def wait_until(condition, timeout: float = 5.0) -> None:
@@ -80,18 +80,20 @@ def test_messages_reach_kafka_with_gap_detection():
     assert all(s["product_ids"] == ["BTC-USD", "ETH-USD", "SOL-USD"] for s in subscribes)
 
     assert [(topic, key) for topic, key, _ in producer.records] == [
-        ("md.level2", b"BTC-USD"),
-        ("md.trades", b"ETH-USD"),
-        ("md.heartbeats", b"heartbeat"),
+        ("research.coinbase.md.level2", b"BTC-USD"),
+        ("research.coinbase.md.trades", b"ETH-USD"),
+        ("research.coinbase.md.heartbeats", b"heartbeat"),
         # The gap before sequence 7: a resync marker per product, then the gap record...
-        ("md.level2", b"BTC-USD"),
-        ("md.level2", b"ETH-USD"),
-        ("md.level2", b"SOL-USD"),
-        ("md.gaps", b"gap"),
+        ("research.coinbase.md.level2", b"BTC-USD"),
+        ("research.coinbase.md.level2", b"ETH-USD"),
+        ("research.coinbase.md.level2", b"SOL-USD"),
+        ("research.coinbase.md.gaps", b"gap"),
         # ...then the message that revealed the gap.
-        ("md.level2", b"BTC-USD"),
+        ("research.coinbase.md.level2", b"BTC-USD"),
     ]
-    assert [json.loads(v)["type"] for t, _, v in producer.records if t == "md.level2"] == [
+    assert [
+        json.loads(v)["type"] for t, _, v in producer.records if t == "research.coinbase.md.level2"
+    ] == [
         "data",
         "resync",
         "resync",
@@ -108,7 +110,7 @@ def test_messages_reach_kafka_with_gap_detection():
     assert sample(metrics, "simex_ingest_gaps_total", kind="gap", cause="feed") == 1
     assert sample(metrics, "simex_ingest_missed_messages_total") == 3
     # Two data envelopes and three resync markers.
-    assert sample(metrics, "simex_ingest_published_total", topic="md.level2") == 5
+    assert sample(metrics, "simex_ingest_published_total", topic="research.coinbase.md.level2") == 5
     assert sample(metrics, "simex_ingest_feed_lag_seconds_count", channel="market_trades") == 1
     assert connected == 1
     assert sample(metrics, "simex_ingest_connected") == 0  # cleared once the task stops
@@ -159,7 +161,7 @@ def test_kafka_refusing_a_message_does_not_stop_the_feed():
 
     class RefusingProducer(FakeProducer):
         async def send(self, topic, value, key):
-            if topic == "md.level2":
+            if topic == "research.coinbase.md.level2":
                 raise MessageSizeTooLargeError()
             return await super().send(topic, value, key)
 
@@ -182,6 +184,12 @@ def test_kafka_refusing_a_message_does_not_stop_the_feed():
         return producer, metrics
 
     producer, metrics = asyncio.run(scenario())
-    assert [topic for topic, _, _ in producer.records] == ["md.trades", "md.heartbeats"]
-    assert sample(metrics, "simex_ingest_publish_errors_total", topic="md.level2") == 1
+    assert [topic for topic, _, _ in producer.records] == [
+        "research.coinbase.md.trades",
+        "research.coinbase.md.heartbeats",
+    ]
+    assert (
+        sample(metrics, "simex_ingest_publish_errors_total", topic="research.coinbase.md.level2")
+        == 1
+    )
     assert sample(metrics, "simex_ingest_reconnects_total", reason="closed") == 0
