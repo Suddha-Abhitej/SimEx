@@ -28,10 +28,10 @@ score that counts.
 flowchart TD
     CB["Coinbase live feed<br/>trades, level-2 book"] --> ING["Ingestor<br/>gap check + resync"]
     ING --> K[("Kafka topics")]
-    K --> REC["Recorder<br/>Parquet + Iceberg on S3"]
+    K --> REC["Recorder<br/>Parquet, archived to home server"]
     K --> FL["Flink feature jobs<br/>candles, VWAP, volatility"]
     K --> BB["Order book builder"]
-    FL --> R[("Redis features")]
+    FL --> R[("Valkey features")]
     BB --> ME["Matching engine<br/>fees, slippage, partial fills"]
     AG["Agents (user side)<br/>MCP, Python SDK, adapters"] <--> GW["Order gateway<br/>auth, risk limits,<br/>stale-data guard, anti-cheat delay"]
     R --> GW
@@ -70,8 +70,8 @@ Full task lists, risks and metrics: [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Tech stack
 
-Python 3.12 · Apache Kafka · Apache Flink · FastAPI · PostgreSQL · Valkey (Redis-compatible) · Parquet + Iceberg on S3 ·
-DuckDB · MCP Python SDK · Next.js · Prometheus + Grafana · OpenTelemetry · Docker · Terraform · AWS ·
+Python 3.12 · Apache Kafka · Apache Flink · FastAPI · PostgreSQL · Valkey (Redis-compatible) · Parquet + Iceberg ·
+DuckDB · MCP Python SDK · Next.js · Prometheus + Grafana · OpenTelemetry · Docker · Terraform · Oracle Cloud (ARM64) · Cloudflare Tunnel ·
 GitHub Actions
 
 ## Repository layout
@@ -91,7 +91,7 @@ simex/
 │   └── playground/     Replay Playground (v1.1)
 ├── sdk/python/         Client SDK
 ├── web/                Leaderboard site
-├── infra/              Prometheus config, Terraform
+├── infra/              Prometheus config, Terraform (Cloudflare, Azure)
 ├── docs/               Plan and architecture decision records
 └── tests/
 ```
