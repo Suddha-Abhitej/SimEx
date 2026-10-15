@@ -10,3 +10,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0003](0003-live-forward-testing-is-the-only-ranked-score.md) | Live forward-testing is the only ranked score | Accepted |
 | [0004](0004-decimal-for-all-money.md) | `Decimal` for all money | Accepted |
 | [0005](0005-fills-at-arrival-with-anti-cheat-delay.md) | Fills at order arrival, with a stale-data guard and anti-cheat delay | Accepted |
+| [0006](0006-zero-cost-hosting-oracle-plus-home-archive.md) | $0 hosting: Oracle Always Free for production, home server for archive | Accepted |
