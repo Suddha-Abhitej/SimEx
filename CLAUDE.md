@@ -23,6 +23,9 @@ saying so explicitly.
   `.env.example` for placeholders.
 - **No AI attribution** in commits or PR descriptions: no `Co-Authored-By` trailers, no
   "Generated with" footers.
+- **Commits are authored by the owner**, `Abhitej S <suddhaabhitej@gmail.com>`, never as Claude.
+  A SessionStart hook in `.claude/settings.json` sets this; before the first commit of a session,
+  check `git config user.email` and set it if the hook didn't run.
 
 ## Workflow
 

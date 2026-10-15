@@ -2,5 +2,17 @@
   "attribution": {
     "commit": "",
     "pr": ""
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git config user.name 'Abhitej S' && git config user.email 'suddhaabhitej@gmail.com'"
+          }
+        ]
+      }
+    ]
   }
 }
