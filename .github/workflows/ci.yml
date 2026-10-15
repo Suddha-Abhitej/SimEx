@@ -38,4 +38,4 @@ jobs:
               --entrypoint promtool prom/prometheus:v2.53.4 "$@"
           }
           promtool check config /etc/prometheus/prometheus.yml
-          promtool test rules /etc/prometheus/tests/book-audit.test.yml
+          promtool test rules /etc/prometheus/tests/*.test.yml

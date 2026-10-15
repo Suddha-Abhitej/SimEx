@@ -1,5 +1,5 @@
 # Local stack shortcuts. On Windows without make, use scripts/dev.ps1 (same targets).
-.PHONY: up down logs ps smoke ingest book
+.PHONY: up down logs ps smoke ingest book record
 
 COMPOSE ?= docker compose
 PYTHON ?= python
@@ -24,3 +24,6 @@ ingest:  ## Run the market-data ingestor (Gemini) against the local stack (metri
 
 book:  ## Run the order book service: md.level2 to Valkey (metrics on :9102/metrics)
 	$(PYTHON) -m simex.book
+
+record:  ## Run the recorder: md.* to data/recordings as hourly Parquet (metrics on :9103/metrics)
+	$(PYTHON) -m simex.recorder
