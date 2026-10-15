@@ -70,7 +70,7 @@ Full task lists, risks and metrics: [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Tech stack
 
-Python 3.12 · Apache Kafka · Apache Flink · FastAPI · PostgreSQL · Redis · Parquet + Iceberg on S3 ·
+Python 3.12 · Apache Kafka · Apache Flink · FastAPI · PostgreSQL · Valkey (Redis-compatible) · Parquet + Iceberg on S3 ·
 DuckDB · MCP Python SDK · Next.js · Prometheus + Grafana · OpenTelemetry · Docker · Terraform · AWS ·
 GitHub Actions
 
@@ -98,18 +98,36 @@ simex/
 
 ## Local development
 
-Requires Python 3.12+ and Docker.
+Requires Python 3.12+ and Docker (Docker Desktop on Windows/macOS). Every image is multi-arch, so the
+same stack runs on an x86 laptop and on the ARM64 production server.
 
 ```bash
-# Infrastructure: Kafka, Postgres, Redis, Prometheus, Grafana
-cp .env.example .env
-docker compose up -d
-
-# Python tooling
-python -m venv .venv && source .venv/bin/activate
+cp .env.example .env              # then change the passwords
+python -m venv .venv && source .venv/bin/activate    # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-ruff check . && pytest
+
+make up       # docker compose up -d --wait: Kafka, Postgres, Valkey, Prometheus
+make smoke    # Kafka produce/consume, Postgres SELECT 1, Valkey SET/GET; PASS/FAIL per service
+make ps       # status and health
+make logs     # follow logs (make logs s=kafka for one service)
+make down     # stop; data stays in named volumes (docker compose down -v deletes it)
+
+ruff check . && ruff format --check . && pytest
 ```
+
+On Windows without `make`, use `.\scripts\dev.ps1 up` (same targets: `up`, `down`, `logs`, `ps`,
+`smoke`), or the plain `docker compose` commands.
+
+| Service | Host port | Memory limit | Notes |
+| --- | --- | --- | --- |
+| Kafka 3.9 (KRaft, single node) | 9092 | 1.25 GB | Heap `-Xms512m -Xmx768m`; containers use `kafka:29092` |
+| Postgres 16 | 5432 | 1 GB | `shared_buffers=256MB` |
+| Valkey 8 (Redis-compatible) | 6379 | 256 MB | `maxmemory 192mb`, `allkeys-lru` |
+| Prometheus | 9090 | 512 MB | 15 days / 2 GB retention |
+| Grafana | 3000 | 256 MB | Off by default: `docker compose --profile monitoring up -d` |
+
+Ports bind to `127.0.0.1` only; on the server, reach them through an SSH tunnel. The default stack
+uses about 3 GB of the server's 12 GB, leaving room for the SimEx services.
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

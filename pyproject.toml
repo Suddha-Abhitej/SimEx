@@ -15,6 +15,10 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
+    # Clients used by scripts/smoke_test.py against the local stack
+    "aiokafka>=0.11",
+    "asyncpg>=0.29",
+    "valkey>=6",
     "pytest>=8",
     "hypothesis>=6",
     "ruff>=0.6",
