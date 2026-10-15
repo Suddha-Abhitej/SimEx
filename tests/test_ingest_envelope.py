@@ -2,9 +2,20 @@ import json
 from decimal import Decimal
 
 import pytest
-from coinbase_samples import HEARTBEAT, L2_SNAPSHOT, SUBSCRIPTIONS, TRADES, raw
+from coinbase_samples import (
+    HEARTBEAT,
+    HEARTBEATS_TOPIC,
+    L2_SNAPSHOT,
+    L2_TOPIC,
+    SUBSCRIPTIONS,
+    TRADES,
+    TRADES_TOPIC,
+    build_envelopes,
+    raw,
+)
 
-from simex.ingest.envelope import build_envelopes, feed_lag_ns, parse_timestamp_ns, product_ids
+from simex.ingest.coinbase import product_ids
+from simex.ingest.envelope import feed_lag_ns, parse_timestamp_ns, topics_for
 
 RECEIVED = 1_792_026_000_250_000_000  # 2026-10-15T01:00:00.25Z
 
@@ -32,7 +43,7 @@ def test_level2_envelope():
     text = raw(L2_SNAPSHOT)
     [env] = build_envelopes(text, L2_SNAPSHOT, RECEIVED)
     assert (env.topic, env.key, env.channel, env.product_id) == (
-        "md.level2",
+        L2_TOPIC,
         b"BTC-USD",
         "level2",
         "BTC-USD",
@@ -48,6 +59,9 @@ def test_level2_envelope():
     assert decoded["product_id"] == "BTC-USD"
     assert decoded["sequence_num"] == 1
     assert decoded["payload"] == L2_SNAPSHOT
+    # Envelope v3: venue, and on level2 whether this is a snapshot and the update IDs.
+    assert decoded["v"] == 3 and decoded["venue"] == "coinbase"
+    assert decoded["snapshot"] is True and decoded["update_ids"] is None
 
 
 def test_payload_is_spliced_in_byte_for_byte():
@@ -67,12 +81,12 @@ def test_prices_and_sizes_stay_strings():
 
 def test_trades_key_by_trade_product():
     [env] = build_envelopes(raw(TRADES), TRADES, RECEIVED)
-    assert (env.topic, env.key, env.product_id) == ("md.trades", b"ETH-USD", "ETH-USD")
+    assert (env.topic, env.key, env.product_id) == (TRADES_TOPIC, b"ETH-USD", "ETH-USD")
 
 
 def test_heartbeat_keyed_by_heartbeat():
     [env] = build_envelopes(raw(HEARTBEAT), HEARTBEAT, RECEIVED)
-    assert (env.topic, env.key, env.channel) == ("md.heartbeats", b"heartbeat", "heartbeats")
+    assert (env.topic, env.key, env.channel) == (HEARTBEATS_TOPIC, b"heartbeat", "heartbeats")
     assert json.loads(env.value)["product_id"] is None
 
 
@@ -96,3 +110,15 @@ def test_message_without_timestamp_has_no_lag():
     message = {k: v for k, v in TRADES.items() if k != "timestamp"}
     [env] = build_envelopes(raw(message), message, RECEIVED)
     assert env.exchange_ts_ns is None and env.lag_ns is None
+
+
+def test_topics_per_venue():
+    gemini, coinbase = topics_for("gemini"), topics_for("coinbase")
+    assert (gemini.level2, gemini.trades, gemini.gaps) == ("md.level2", "md.trades", "md.gaps")
+    # Research data can never land on the topics the book and matching engine read.
+    assert coinbase.for_channels(["level2", "market_trades", "heartbeats"]) == [
+        "research.coinbase.md.level2",
+        "research.coinbase.md.trades",
+        "research.coinbase.md.heartbeats",
+        "research.coinbase.md.gaps",
+    ]

@@ -13,7 +13,7 @@ from simex.ingest.client import CoinbaseIngestor, ResyncTimeout
 from simex.ingest.config import Settings
 from simex.ingest.kafka import level2_retention_problem, level2_topic_configs
 from simex.ingest.metrics import IngestMetrics
-from simex.ingest.sequence import SequenceAnomaly
+from simex.ingest.venue import Anomaly
 
 T0 = 1000.0
 
@@ -60,7 +60,7 @@ def refreshes(metrics: IngestMetrics, product: str, outcome: str) -> float:
 
 
 def markers(producer: FakeProducer) -> list[dict]:
-    return [r for r in records(producer, "md.level2") if r["type"] == "resync"]
+    return [r for r in records(producer, "research.coinbase.md.level2") if r["type"] == "resync"]
 
 
 def test_refreshes_one_product_at_a_time_staggered_over_the_interval():
@@ -115,7 +115,7 @@ def test_updates_for_the_refreshing_product_are_flagged_and_others_are_not():
     asyncio.run(ingestor.handle(json.dumps(update)))
     update["events"][0]["product_id"] = "ETH-USD"
     asyncio.run(ingestor.handle(json.dumps(update)))
-    btc, eth = records(producer, "md.level2")[-2:]
+    btc, eth = records(producer, "research.coinbase.md.level2")[-2:]
     assert (btc["product_id"], btc["awaiting_snapshot"]) == ("BTC-USD", True)
     assert (eth["product_id"], eth["awaiting_snapshot"]) == ("ETH-USD", False)
 
@@ -153,7 +153,8 @@ def test_gap_during_a_refresh_takes_over_with_a_full_resync():
     asyncio.run(ingestor._drive_refresh(FakeWs()))
     refresh_id = ingestor.resync.id
 
-    asyncio.run(ingestor._on_anomaly(SequenceAnomaly("gap", 10, 12), "l2_data", (None, 1)))
+    gap = Anomaly("gap", PAIRS, "sequence_gap", expected=10, received=12, missing=2)
+    asyncio.run(ingestor._on_anomaly(gap, (None, 1)))
 
     assert ingestor.resync.trigger == "gap" and ingestor.resync.id != refresh_id
     assert ingestor.resubscribe_wanted and ingestor.awaiting == set(PAIRS)
@@ -220,7 +221,10 @@ def test_staggered_refreshes_against_the_fake_server():
         await wait_until(lambda: ingestor.resync is None and not ingestor.awaiting)
         await fake.update("ETH-USD")
         await wait_until(
-            lambda: records(producer, "md.level2")[-1]["payload"]["events"][0]["type"] == "update"
+            lambda: (
+                records(producer, "research.coinbase.md.level2")[-1]["payload"]["events"][0]["type"]
+                == "update"
+            )
         )
 
     ingestor, producer, metrics = asyncio.run(
@@ -232,7 +236,7 @@ def test_staggered_refreshes_against_the_fake_server():
     assert [r[2]["product_ids"] for r in resubscribes] == [[p] for p in PAIRS]
     assert fake.connections == 1  # no reconnect
 
-    level2 = records(producer, "md.level2")
+    level2 = records(producer, "research.coinbase.md.level2")
     refresh_markers = [r for r in level2 if r["type"] == "resync"][:3]
     assert [m["product_id"] for m in refresh_markers] == list(PAIRS)
     # After each marker, that product's next envelope is its fresh snapshot.
@@ -242,4 +246,4 @@ def test_staggered_refreshes_against_the_fake_server():
         assert mine["payload"]["events"][0]["type"] == "snapshot"
         assert mine["awaiting_snapshot"] is False
     assert level2[-1]["product_id"] == "ETH-USD" and level2[-1]["awaiting_snapshot"] is False
-    assert records(producer, "md.gaps") == []
+    assert records(producer, "research.coinbase.md.gaps") == []
