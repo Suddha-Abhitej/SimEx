@@ -345,3 +345,43 @@ def test_settings_from_env():
     assert settings.publish_depth == 20 and settings.valkey_url == "redis://127.0.0.1:6380/0"
     assert settings.lookback_seconds == 1800 and settings.pairs == ("BTC-USD",)
     assert BookSettings.from_env({}).publish_depth == 10
+
+
+def test_catching_up_latches_off_and_never_flaps_in_steady_state():
+    """A book leaves catch-up once; queued-but-not-yet-applied records or a quiet spell later
+    must never flip it back (live run: SOL flapped 20 times in 30 min)."""
+    records = [
+        rec("BTC-USD", depth("BTC-USD", [("100", "1")], [("101", "1")], snapshot=True), 5),
+        rec("SOL-USD", depth("SOL-USD", [("3", "1")], [("3.1", "1")], snapshot=True), 5),
+        rec("BTC-USD", depth("BTC-USD", bids=[("99", "1")]), 4),
+    ]
+    source = FakeSource({0: records, 1: []})  # BTC and SOL share partition 0; p1 is empty
+    settings = BookSettings(pairs=("BTC-USD", "SOL-USD"), snapshot_refresh_seconds=60)
+    service, metrics = make_service(source, settings=settings)
+
+    async def scenario():
+        await service.start()
+        # Before catch-up both books are catching up.
+        assert service.catching_up("BTC-USD") and service.catching_up("SOL-USD")
+        await drain(service)
+        assert not service.catching_up("BTC-USD") and not service.catching_up("SOL-USD")
+
+        # Steady state: new records arrive and are queued but not applied yet (the window in
+        # which the publisher used to see a non-empty queue). SOL stays quiet throughout.
+        for _ in range(20):
+            source.data[0].append(rec("BTC-USD", depth("BTC-USD", bids=[("99", "2")]), 0))
+            source.data[0].append(rec("SOL-USD", depth("SOL-USD", asks=[("3.2", "1")]), 0))
+            service.dispatch(await source.fetch(timeout_ms=0))
+            assert not service.queues["SOL-USD"].empty()  # queued, not yet applied
+            assert not service.catching_up("SOL-USD") and not service.catching_up("BTC-USD")
+            await service.publish_once()
+            for product, queue in service.queues.items():
+                while not queue.empty():
+                    service.apply(product, queue.get_nowait())
+            service.maybe_reread_from_start()
+
+    asyncio.run(scenario())
+    record = json.loads(service.store.values[book_key("gemini", "SOL-USD")])
+    assert record["catching_up"] is False and usable(record, NOW_NS)
+    labels = {"venue": "gemini", "product_id": "SOL-USD"}
+    assert sample(metrics, "simex_book_catching_up", **labels) == 0

@@ -63,6 +63,12 @@ class BookService:
         self.reread_until: dict[int, int] = {}  # during the log-start re-read
         self.reread_products: set[str] = set()  # the books that re-read feeds (EMPTY at its start)
         self.reread_done = False
+        # Books that have finished catching up. A latch: set once the book's partition has
+        # reached the end offset seen at startup and its queue has drained, and cleared again
+        # only for the books the one-time log-start re-read feeds. In steady state a queued but
+        # not yet applied record, or a quiet spell, must never look like catching up; staleness
+        # is the reader's 5 s rule on received_at_ns.
+        self.caught_up_books: set[str] = set()
         self.last_synced_ns: dict[str, int] = {}
         for product in settings.pairs:
             metrics.set_state(settings.venue, product, BookState.EMPTY)
@@ -104,10 +110,18 @@ class BookService:
         )
 
     def catching_up(self, product: str) -> bool:
-        partition = self.partition_of.get(product)
-        if partition is None:
-            return len(self.caught_up) < len(self.position)
-        return partition not in self.caught_up or not self.queues[product].empty()
+        return product not in self.caught_up_books
+
+    def update_catch_up(self) -> None:
+        """Latch books that have caught up; call when the workers have applied what was queued."""
+        every_partition = len(self.caught_up) == len(self.position)
+        for product, queue in self.queues.items():
+            if product in self.caught_up_books or not queue.empty():
+                continue
+            partition = self.partition_of.get(product)
+            # A book with no record yet has caught up when every partition has.
+            if every_partition if partition is None else partition in self.caught_up:
+                self.caught_up_books.add(product)
 
     # Dispatch ----------------------------------------------------------------------------------
 
@@ -128,6 +142,7 @@ class BookService:
 
     def maybe_reread_from_start(self) -> None:
         """Once every partition has caught up, re-read from the log start for EMPTY books."""
+        self.update_catch_up()
         if self.reread_done or len(self.caught_up) < len(self.position):
             return
         if not all(q.empty() for q in self.queues.values()):
@@ -137,6 +152,7 @@ class BookService:
         if not empty:
             return
         self.reread_products = set(empty)
+        self.caught_up_books -= self.reread_products  # catching up again, from the log start
         log.warning(
             "no snapshot in the last %.0f s for %s; re-reading md.level2 from the log start once",
             self.settings.lookback_seconds,

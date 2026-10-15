@@ -55,13 +55,23 @@ themselves. The week-1 gate also asks for proof that the book matches the exchan
   (books already SYNCED must not see old data again). After that the book waits for a live
   snapshot.
 - **One writer per pair.** A dispatcher routes records by Kafka key (the product ID; nothing is
-  parsed) to one queue and one asyncio task per product, which decodes and applies. Each book
-  reports `catching_up` until its partition has passed the end offset seen at startup.
+  parsed) to one queue and one asyncio task per product, which decodes and applies.
+- **`catching_up` is a latch.** It is true only during the startup catch-up, until the book's
+  partition has passed the end offset seen at startup and its queue has drained. It turns true
+  again only for books the one-time log-start re-read feeds, until that re-read catches up. In
+  steady state it never flips back: a record that is queued but not yet applied, or a quiet spell,
+  is not catching up. Staleness after startup is the reader's 5 s rule on `received_at_ns`. (The
+  first version derived it from "queue non-empty" at publish time and flapped in steady state;
+  see Measured.)
 - **Throughput.** Measured on an x86 dev container, decoding and applying a 20-level diff takes
   about 100 us (about 9,800 msg/s) and a 4,548-level snapshot about 45 ms. A full window (about
   one hour, 100k messages at the measured 28 msg/s) replays in about 10 s; allow 2 to 3x that on
   the 2-core ARM server.
 - **Memory.** About 285 bytes per level: BTC 4,548 levels 1.3 MB, ETH 0.6 MB, SOL 0.5 MB.
+- **Partitions.** `md.level2` has 3 partitions, but the three pairs' keys hash onto only two of
+  them (on the laptop, p1 stayed empty). That is fine: ordering is per key, and two products
+  sharing a partition only share a dispatcher's read loop, not a book. It does make load uneven,
+  so if more pairs are added, revisit the partition count or use an explicit partitioner.
 
 **Valkey record, one per product.** It is written every `BOOK_PUBLISH_INTERVAL_SECONDS` (0.25)
 with one atomic `SET key value PX 2000`:
@@ -136,3 +146,23 @@ request returns the top 200 levels at a `lastUpdateId` equal to the stream's lat
 - Valkey holds only the top N levels. Anything that needs the full book (the matching engine)
   embeds the library rather than reading Valkey.
 - Restarting the service rebuilds every book from Kafka in seconds. No book state is persisted.
+
+## Measured
+
+Live validation of #47 on 2026-10-15 from a Windows laptop against the local Docker stack, with
+the Gemini ingestor running:
+
+| Run | Result |
+| --- | --- |
+| 30 min, book service restarted at about 15 min | 0 crossed books, 0 Valkey errors, 0 re-reads from the log start. Restart: keys missing for the 10 s the service was down, then `EMPTY (catching up)` to `SYNCED` in about 5 s, reading `md.level2 from 3600 s ago: p0 10853..41012, p1 0..0, p2 19931..77109`. Scheduled refreshes dropped BTC (at 1,178 s) and ETH (at 1,778 s) for about 0.5 s each. Apply about 65 us per event. |
+| `SIMEX_INGEST_DROP_EVERY=500`, 5 min | 17 injected gaps on the ingestor, 17 marker resyncs on the books (BTC 7, ETH 9, SOL 1). Outside SYNCED: mean about 280 ms, max 329 ms. 0 crossed. |
+
+**Bug found and fixed.** In that run, `catching_up` flapped from SYNCED to `SYNCED (catching up)`
+for about 0.5 s at a time long after startup: SOL 20 times in 30 minutes, BTC and ETH once or
+twice. That lowered SOL's usability to 98.6%. The cause was the first version's rule, "catching
+up while the product's queue is non-empty". In steady state the publisher could run while a
+record was queued but not yet applied. SOL was hit most because it is published last, after the
+awaits for the BTC and ETH writes, which give the dispatcher time to queue new records.
+`catching_up` is now the latch described above. A test reproduces the flap on the old rule. A
+40-second steady-state run on a local Kafka and Redis, polling every 20 ms, saw 27 to 30
+`catching_up=true` reads per busy book with the old rule and 0 with the latch.
