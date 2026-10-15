@@ -6,11 +6,13 @@ import logging
 from decimal import Decimal
 
 import websockets
-from fake_gemini import PAIRS, FakeGemini
+from fake_gemini import PAIRS, SYMBOLS, FakeGemini
 from test_ingest_end_to_end import FakeProducer, wait_until
 
+from simex.book import OrderBook, Outcome
 from simex.ingest.client import GeminiIngestor
 from simex.ingest.config import Settings
+from simex.ingest.control import ResyncRequest
 from simex.ingest.metrics import IngestMetrics
 from simex.marketdata import BookUpdate, ResyncMarker, Trade, decode
 
@@ -286,7 +288,10 @@ def test_trades_alone_do_not_keep_a_dead_depth_stream_alive():
         # No depth diffs and no pings, while a trade arrives every 0.1 s (well inside the 0.4 s
         # stale window): the trades must not hide the dead depth stream.
         for _ in range(30):
-            await fake.trade("ETH-USD")
+            try:
+                await fake.trade("ETH-USD")
+            except websockets.ConnectionClosed:
+                pass  # the ingestor just dropped this socket as stale: what the test expects
             await asyncio.sleep(0.1)
             if fake.connections >= 2:
                 reconnected_while_trading.append(True)
@@ -298,3 +303,137 @@ def test_trades_alone_do_not_keep_a_dead_depth_stream_alive():
     assert reconnected_while_trading
     assert sample(metrics, "simex_ingest_reconnects_total", reason="stale") >= 1
     assert records(producer, "md.trades")  # the trades themselves were still published
+
+
+# Book audits and the resync back-channel (ADR 0012) ---------------------------------------------
+
+
+def replay_level2(producer: FakeProducer) -> tuple[dict, list]:
+    """Feed md.level2 to one OrderBook per pair, as the book service would; returns the books and
+    (product, outcome) for each audit."""
+    books = {p: OrderBook("gemini", p) for p in PAIRS}
+    audits = []
+    for value in values(producer, "md.level2"):
+        for event in decode(value):
+            outcome = books[event.product_id].apply(event)
+            if outcome.name.startswith("AUDIT_"):
+                audits.append((event.product_id, outcome))
+    return books, audits
+
+
+def audit_records(producer: FakeProducer) -> list[dict]:
+    return [r for r in records(producer, "md.level2") if r["type"] == "audit"]
+
+
+def test_audits_sit_right_after_their_diff_and_match_the_book():
+    fake = FakeGemini()
+
+    async def script(ingestor, producer, metrics):
+        for _ in range(3):
+            for product in PAIRS:
+                await fake.update(product, bids=fake.bigger_best_bid(SYMBOLS[product]))
+            await asyncio.sleep(0.05)
+        await wait_until(lambda: len(audit_records(producer)) >= 6)
+
+    _, producer, metrics = asyncio.run(run_against(fake, script, audit_seconds=0.3))
+
+    level2 = records(producer, "md.level2")
+    for i, record in enumerate(level2):
+        if record["type"] != "audit":
+            continue
+        assert record["aligned"] and record["reason"] == "aligned"
+        # The product's last data message is the one the audit matches (a quiet product may get
+        # two audits at the same diff).
+        before = [r for r in level2[:i] if r["product_id"] == record["product_id"]]
+        data = [r for r in before if r["type"] == "data"]
+        assert data[-1]["update_ids"][1] == record["update_id"]
+        assert all(r["type"] == "audit" for r in before[before.index(data[-1]) + 1 :])
+    # Round robin over the pairs, one request at a time.
+    requested = [r[2]["params"]["symbol"] for r in fake.requests_of("depth")]
+    assert requested[:3] == ["btcusd", "ethusd", "solusd"]
+    books, audits = replay_level2(producer)
+    assert audits and all(o.name == "AUDIT_MATCH" for _, o in audits)
+    assert all(book.ready for book in books.values())
+    assert (
+        sample(metrics, "simex_ingest_audits_total", product_id="BTC-USD", outcome="aligned") >= 1
+    )
+
+
+def test_an_audit_answered_ahead_of_the_stream_is_held_for_its_diff():
+    fake = FakeGemini()
+    fake.depth_mode = "early"
+
+    async def script(ingestor, producer, metrics):
+        await wait_until(lambda: len(audit_records(producer)) >= 3)
+
+    _, producer, metrics = asyncio.run(run_against(fake, script, audit_seconds=0.3))
+    assert all(r["aligned"] for r in audit_records(producer))
+    _, audits = replay_level2(producer)
+    assert audits and all(o.name == "AUDIT_MATCH" for _, o in audits)
+
+
+def test_an_audit_behind_the_stream_is_published_unaligned():
+    fake = FakeGemini()
+    fake.depth_mode = "late"
+
+    async def script(ingestor, producer, metrics):
+        await wait_until(lambda: len(audit_records(producer)) >= 3)
+
+    _, producer, metrics = asyncio.run(run_against(fake, script, audit_seconds=0.3))
+    assert {(r["aligned"], r["reason"]) for r in audit_records(producer)} == {
+        (False, "stream_past")
+    }
+    _, audits = replay_level2(producer)
+    assert {o.name for _, o in audits} == {"AUDIT_UNALIGNED"}
+    unaligned = sample(
+        metrics, "simex_ingest_audits_total", product_id="BTC-USD", outcome="unaligned_stream_past"
+    )
+    assert unaligned >= 1
+
+
+def test_a_corrupted_depth_answer_is_a_mismatch_in_the_book():
+    fake = FakeGemini()
+    fake.corrupt_depth = 1
+
+    async def script(ingestor, producer, metrics):
+        await wait_until(lambda: len(audit_records(producer)) >= 4)
+
+    _, producer, _ = asyncio.run(run_against(fake, script, audit_seconds=0.3))
+    books, audits = replay_level2(producer)
+    assert audits[0] == ("BTC-USD", Outcome.AUDIT_MISMATCH)
+    assert all(o is Outcome.AUDIT_MATCH for _, o in audits[1:3])
+    assert books["ETH-USD"].ready and not books["BTC-USD"].ready
+
+
+def test_book_resync_requests_are_deduplicated_per_product(caplog):
+    fake = FakeGemini()
+    outcomes = []
+
+    async def script(ingestor, producer, metrics):
+        request = ResyncRequest("gemini", "ETH-USD", "audit_mismatch", 0)
+        outcomes.append(await ingestor.request_resync(request))
+        outcomes.append(await ingestor.request_resync(request))  # already resyncing
+        outcomes.append(await ingestor.request_resync(ResyncRequest("coinbase", "ETH-USD", "", 0)))
+        outcomes.append(await ingestor.request_resync(ResyncRequest("gemini", "DOGE-USD", "", 0)))
+        await wait_until(lambda: ingestor.resync is None and not ingestor.awaiting)
+        outcomes.append(await ingestor.request_resync(request))  # synced again: accepted
+        await wait_until(lambda: ingestor.resync is None and not ingestor.awaiting)
+
+    with caplog.at_level(logging.WARNING, logger="simex.ingest.client"):
+        _, producer, metrics = asyncio.run(run_against(fake, script, resync_min_interval_seconds=0))
+    assert outcomes == ["accepted", "duplicate", "unknown", "unknown", "accepted"]
+    assert [r[2]["params"] for r in fake.requests_of("UNSUBSCRIBE")] == [["ethusd@depth@100ms"]] * 2
+    markers = [r for r in records(producer, "md.level2") if r["type"] == "resync"]
+    assert [(m["product_id"], m["reason"]) for m in markers] == [("ETH-USD", "book_request")] * 2
+    assert (
+        sample(metrics, "simex_ingest_resyncs_total", method="resubscribe", trigger="book_request")
+        == 2
+    )
+    assert (
+        sample(
+            metrics, "simex_ingest_resync_requests_total", product_id="ETH-USD", outcome="duplicate"
+        )
+        == 1
+    )
+    assert records(producer, "md.gaps") == []
+    assert "resync requested by the book service for ETH-USD" in caplog.text

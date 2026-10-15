@@ -80,7 +80,8 @@ class IngestMetrics:
         self.resyncs = venued(
             Counter,
             "simex_ingest_resyncs",
-            "Level2 resyncs started (method=resubscribe|reconnect, trigger=gap|disconnect|refresh)",
+            "Level2 resyncs started (method=resubscribe|reconnect, "
+            "trigger=gap|disconnect|refresh|book_request)",
             ["method", "trigger"],
         )
         self.resyncs_suppressed = venued(
@@ -163,6 +164,19 @@ class IngestMetrics:
             "stale_after_snapshot, unexpected_snapshot, malformed_update_ids); any but "
             "stale_after_snapshot should stay at 0",
             ["product_id", "kind"],
+        )
+        self.audits = venued(
+            Counter,
+            "simex_ingest_audits",
+            "Book audits (ADR 0012) by outcome: requested, then aligned, or unaligned_<why> "
+            "(stream_past, timeout, resync, superseded), or skipped_not_synced",
+            ["product_id", "outcome"],
+        )
+        self.resync_requests = venued(
+            Counter,
+            "simex_ingest_resync_requests",
+            "Resync requests from the book service by outcome (accepted, duplicate, unknown)",
+            ["product_id", "outcome"],
         )
         self.ping_rtt = venued(
             Gauge,

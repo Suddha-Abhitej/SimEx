@@ -172,6 +172,11 @@ python scripts/ingest_report.py --seconds 120   # msg/s, lag p50/p99, gaps, resy
   feed, and must never drive a stale-data guard.
   `simex_ingest_time_since_last_snapshot_seconds` is the age of the book's baseline, not a
   staleness signal.
+- **Book audit:** every 120 s per product (`INGEST_AUDIT_SECONDS`; the pairs take turns, 40 s
+  apart) the ingestor asks Gemini for the top 100 levels a side and publishes the answer on
+  `md.level2` as a `type: "audit"` record, right after the diff it matches. It also serves the
+  book service's requests on `ctl.resync_requests` with a single-product resync
+  ([ADR 0012](docs/adr/0012-order-book-service-valkey-and-audit.md)).
 - **Trades:** Gemini trade IDs are exchange-wide and not always in order, so lost trades can't be
   detected; consumers dedupe by trade ID (`simex.marketdata.TradeDeduper`).
 
@@ -215,8 +220,15 @@ python scripts/book_report.py --seconds 60       # states, usability, counters (
   state, best bid and ask, mid, spread, the top `BOOK_PUBLISH_DEPTH` (10) levels, the last update
   ID and timestamps. **A reader may use it only if** the key exists, `state` is `SYNCED`,
   `catching_up` is false and `received_at_ns` is less than 5 s old (`simex.book.record.usable`).
+- **Audit:** each book compares its top 100 levels a side, exactly, with the ingestor's audits
+  (about one per product every 2 minutes). `simex_book_audits_total{outcome}` counts `match`,
+  `mismatch` (should stay 0), `skipped` and `unaligned`. A mismatch or a crossed book logs an
+  error, drops the book to RESYNCING and asks the ingestor for a fresh snapshot on
+  `ctl.resync_requests`, so it is SYNCED again within about a second rather than at the next
+  30-minute refresh. Failures replayed from history at startup send no request.
 - **Metrics** are at `http://127.0.0.1:9102/metrics`: book state, level counts, crossed books
-  (should stay 0), resyncs, apply latency and time since the last snapshot or update.
+  (should stay 0), audits, resyncs and resync requests, apply latency and time since the last
+  snapshot or update.
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

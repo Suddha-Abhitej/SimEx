@@ -45,6 +45,11 @@ class Settings:
     level2_retention_hours: float = 24.0
     # Per partition; -1 means no size limit.
     level2_retention_bytes: int = 2 * 1024**3
+    # Book audit (ADR 0012): ask the venue for one product's top levels this often, staggered
+    # over the pairs, and publish them on the level2 topic for the books to compare. 0 means off.
+    audit_seconds: float = 120.0
+    # How long a depth response may wait for the diff it matches before it goes out unaligned.
+    audit_hold_seconds: float = 2.0
     # Dev-only fault injector: drop every Nth received message. 0 means off.
     drop_every: int = 0
 
@@ -117,5 +122,7 @@ class Settings:
             level2_retention_bytes=int(
                 get("INGEST_LEVEL2_RETENTION_BYTES", d.level2_retention_bytes)
             ),
+            audit_seconds=float(get("INGEST_AUDIT_SECONDS", d.audit_seconds)),
+            audit_hold_seconds=float(get("INGEST_AUDIT_HOLD_SECONDS", d.audit_hold_seconds)),
             drop_every=int(get("SIMEX_INGEST_DROP_EVERY", d.drop_every)),
         )

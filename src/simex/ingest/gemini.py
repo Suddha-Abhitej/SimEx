@@ -53,6 +53,7 @@ class GeminiAdapter:
     default_url = DEFAULT_URL
     channels = (LEVEL2, TRADES)
     gap_channels = (LEVEL2,)
+    supports_audit = True
 
     def __init__(self, pairs: tuple[str, ...]) -> None:
         self.pairs = pairs
@@ -60,12 +61,13 @@ class GeminiAdapter:
         self._ids = itertools.count(1)
         self._subscribe_ids: set[int] = set()
         self._ping_id: int | None = None
+        self._audit_ids: dict[int, str] = {}  # depth request id -> product
         self.books: dict[str, _Book] = {}
         self.reset()
 
     # Requests ----------------------------------------------------------------------------------
 
-    def _request(self, method: str, params: list[str] | None = None) -> tuple[int, str]:
+    def _request(self, method: str, params: list[str] | dict | None = None) -> tuple[int, str]:
         request_id = next(self._ids)
         frame: dict = {"method": method, "id": request_id}
         if params is not None:
@@ -84,6 +86,7 @@ class GeminiAdapter:
         self.books = {p: _Book() for p in self.pairs}
         self._subscribe_ids.clear()
         self._ping_id = None
+        self._audit_ids.clear()
 
     def connect_frames(self) -> list[str]:
         streams = [self.depth_stream(p) for p in self.pairs]
@@ -104,6 +107,13 @@ class GeminiAdapter:
 
     def ping_frame(self) -> str | None:
         self._ping_id, frame = self._request("ping")
+        return frame
+
+    def audit_frame(self, product: str) -> str | None:
+        """The one-shot depth request: top 100 levels a side at lastUpdateId, which the live probe
+        measured as equal to the stream's latest u (ADR 0011, ADR 0012)."""
+        request_id, frame = self._request("depth", {"symbol": venue_symbol(product).lower()})
+        self._audit_ids[request_id] = product
         return frame
 
     def note_dropped(self, message: dict) -> None:
@@ -128,12 +138,19 @@ class GeminiAdapter:
 
     def _response(self, message: dict) -> Parsed:
         status = message.get("status")
-        if message.get("error") or (isinstance(status, int) and status >= 400):
-            return Parsed(error=json.dumps(message))
         request_id = message.get("id")
+        if message.get("error") or (isinstance(status, int) and status >= 400):
+            self._audit_ids.pop(request_id, None)
+            return Parsed(error=json.dumps(message))
         if request_id == self._ping_id:
             self._ping_id = None
             return Parsed(pong=True)
+        if (product := self._audit_ids.pop(request_id, None)) is not None:
+            result = message.get("result")
+            update_id = _int(result.get("lastUpdateId")) if isinstance(result, dict) else None
+            if update_id is None:
+                return Parsed(error=f"depth response without lastUpdateId: {json.dumps(message)}")
+            return Parsed(audit=(product, update_id))
         return Parsed(subscribed=request_id in self._subscribe_ids)
 
     def _depth(self, product: str, message: dict, parsed: Parsed) -> None:

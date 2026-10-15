@@ -5,7 +5,12 @@ from decimal import Decimal
 
 from coinbase_samples import L2_SNAPSHOT, TRADES, build_envelopes, raw
 
-from simex.ingest.envelope import build_envelope, build_resync_marker, topics_for
+from simex.ingest.envelope import (
+    build_audit_envelope,
+    build_envelope,
+    build_resync_marker,
+    topics_for,
+)
 from simex.ingest.venue import LEVEL2, Item
 from simex.ingest.venue import TRADES as TRADES_CHANNEL
 from simex.marketdata import BookUpdate, ResyncMarker, Trade, TradeDeduper, decode
@@ -126,3 +131,17 @@ def test_trade_deduper_ignores_order():
     ]
     other_product = Trade("gemini", "ETH-USD", "10", Decimal(1), Decimal(1), None, None, 0)
     assert dedupe.is_new(other_product)
+
+
+def test_audit_from_another_venue_is_ignored():
+    value = build_audit_envelope(
+        "{}",
+        product_id="BTC-USD",
+        update_id=1,
+        aligned=True,
+        reason="aligned",
+        received_at_ns=0,
+        venue="coinbase",
+        topics=topics_for("coinbase"),
+    ).value
+    assert decode(value) == []

@@ -16,6 +16,7 @@ import valkey.asyncio as valkey
 from prometheus_client import start_http_server
 
 from simex.ingest.backoff import Backoff
+from simex.ingest.control import KafkaResyncRequester
 
 from .config import BookSettings
 from .metrics import BookMetrics
@@ -43,8 +44,10 @@ async def main() -> None:
     try:
         while True:
             source = KafkaLevel2Source(settings.kafka_bootstrap_servers, settings.level2_topic)
-            service = BookService(settings, source, store, metrics)
+            requester = KafkaResyncRequester(settings.kafka_bootstrap_servers)
+            service = BookService(settings, source, store, metrics, requester=requester)
             try:
+                await requester.start()
                 await service.run()
             except asyncio.CancelledError:
                 raise
@@ -52,6 +55,8 @@ async def main() -> None:
                 delay = backoff.next_delay()
                 log.warning("book service stopped (%r); starting over in %.1fs", exc, delay)
                 await asyncio.sleep(delay)
+            finally:
+                await requester.stop()
     finally:
         await store.aclose()
 

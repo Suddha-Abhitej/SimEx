@@ -51,7 +51,25 @@ class ResyncMarker:
     received_at_ns: int
 
 
-Event = BookUpdate | Trade | ResyncMarker
+@dataclass(frozen=True)
+class BookAudit:
+    """The venue's own top levels at one update ID, to check the book against (ADR 0012).
+
+    Only an aligned audit sits right after the message whose last update ID is update_id; an
+    unaligned one (the stream was already past it, or it couldn't be placed) proves nothing.
+    """
+
+    venue: str
+    product_id: str
+    update_id: int
+    aligned: bool
+    reason: str  # "aligned", or why not: stream_past, timeout, resync, superseded
+    bids: tuple[Level, ...]  # best first, as the venue sent them
+    asks: tuple[Level, ...]
+    received_at_ns: int
+
+
+Event = BookUpdate | Trade | ResyncMarker | BookAudit
 
 
 def _decimal(value: object) -> Decimal:
@@ -73,6 +91,8 @@ def decode(value: bytes | str) -> list[Event]:
     received = envelope["received_at_ns"]
     if kind == "resync":
         return [ResyncMarker(venue, product, envelope["resync_id"], envelope["reason"], received)]
+    if kind == "audit":
+        return _audit(envelope, venue, product, received)
     if kind != "data":
         return []
     payload = envelope.get("payload") or {}
@@ -82,6 +102,25 @@ def decode(value: bytes | str) -> list[Event]:
     if venue == "coinbase":
         return _coinbase(envelope, payload, channel, product, received)
     return []
+
+
+def _audit(envelope: dict, venue: str, product: str, received: int) -> list:
+    payload = envelope.get("payload") or {}
+    if venue != "gemini":
+        return []
+    result = payload.get("result") or {}  # Gemini's depth response
+    return [
+        BookAudit(
+            venue=venue,
+            product_id=product,
+            update_id=int(envelope["update_id"]),
+            aligned=bool(envelope.get("aligned")),
+            reason=str(envelope.get("reason", "")),
+            bids=_levels(result.get("bids")),
+            asks=_levels(result.get("asks")),
+            received_at_ns=received,
+        )
+    ]
 
 
 def _gemini(envelope: dict, payload: dict, channel: str, product: str, received: int) -> list:
