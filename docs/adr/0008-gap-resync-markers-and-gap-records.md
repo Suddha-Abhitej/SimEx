@@ -60,8 +60,11 @@ Two facts shape the design:
 - Every gap costs a resubscribe of all three pairs' snapshots (several MB on Kafka), because a
   per-connection counter cannot say which product lost data. The rate limit bounds this.
 - Downstream code must tolerate v1 and v2 envelopes and unknown `type` values.
-- `simex_ingest_time_since_last_snapshot_seconds` and `simex_ingest_awaiting_snapshot` give stale
-  data guards a per-product signal.
+- Stale-data guards should use `simex_ingest_last_message_age_seconds` (per product and
+  channel) together with `simex_ingest_awaiting_snapshot`.
+  `simex_ingest_time_since_last_snapshot_seconds` is not a staleness signal: Coinbase only sends
+  snapshots on subscribe, so on a healthy connection it simply grows. It says how old a book's
+  baseline is and when the last resync happened.
 - If Coinbase really moves to per-product counters, we would see false gaps and constant resyncs;
   the alarm is there to catch that.
 - Whether resubscribe yields a snapshot rests on third-party evidence until the live injector run

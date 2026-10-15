@@ -98,6 +98,7 @@ def scrape_gap_metrics(url: str) -> dict[str, float] | None:
         "simex_ingest_feed_gaps_last_minute",
         "simex_ingest_fault_injected_drops_total",
         "simex_ingest_time_since_last_snapshot_seconds",
+        "simex_ingest_last_message_age_seconds",
     )
     values: dict[str, float] = {}
     for line in text.splitlines():
