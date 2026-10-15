@@ -33,26 +33,33 @@ class FakeCoinbase:
         self.connections += 1
         connection = self.connections
         self._ws, self._seq = ws, 0
-        subscribed: set[str] = set()
-        unsubscribed_level2 = False
+        # Subscriptions are per channel and product, as on Coinbase.
+        subscribed: dict[str, set[str]] = {}
+        unsubscribed_level2: set[str] = set()
         async for raw in ws:
             request = json.loads(raw)
             self.requests.append((connection, time.monotonic(), request))
-            channel = request["channel"]
+            channel, products = request["channel"], request["product_ids"]
+            current = subscribed.setdefault(channel, set())
             if request["type"] == "unsubscribe":
-                subscribed.discard(channel)
-                unsubscribed_level2 = unsubscribed_level2 or channel == "level2"
+                current.difference_update(products)
+                if channel == "level2":
+                    unsubscribed_level2.update(products)
                 await self.ack(subscribed)
                 continue
-            duplicate = channel in subscribed
-            subscribed.add(channel)
+            new = [p for p in products if p not in current]  # a duplicate sends no snapshot
+            current.update(products)
             await self.ack(subscribed)
-            resubscribe = channel == "level2" and unsubscribed_level2
-            if channel == "level2" and not duplicate:
-                if not resubscribe or self.snapshot_on_resubscribe:
-                    for product in self.pairs:
+            resubscribe = channel == "level2" and bool(unsubscribed_level2.intersection(products))
+            if channel == "level2":
+                for product in new:
+                    if product not in unsubscribed_level2 or self.snapshot_on_resubscribe:
                         await self.snapshot(product)
-            if {"level2", "market_trades", "heartbeats"} <= subscribed and not resubscribe:
+            everything = all(
+                set(self.pairs) <= subscribed.get(ch, set())
+                for ch in ("level2", "market_trades", "heartbeats")
+            )
+            if everything and not resubscribe:
                 self.ready_connections = connection
 
     async def send(self, channel: str, events: list) -> None:
@@ -70,8 +77,8 @@ class FakeCoinbase:
         """Pretend `count` messages were sent and lost."""
         self._seq += count
 
-    async def ack(self, subscribed: set[str]) -> None:
-        subs = {ch: list(self.pairs) for ch in sorted(subscribed)}
+    async def ack(self, subscribed: dict[str, set[str]]) -> None:
+        subs = {ch: sorted(products) for ch, products in sorted(subscribed.items()) if products}
         await self.send("subscriptions", [{"subscriptions": subs}])
 
     async def snapshot(self, product: str) -> None:
