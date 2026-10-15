@@ -83,7 +83,7 @@ async def check_kafka() -> str:
     from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
     from aiokafka.admin import AIOKafkaAdminClient, NewTopic
 
-    bootstrap = f"localhost:{os.environ.get('KAFKA_PORT', '9092')}"
+    bootstrap = f"127.0.0.1:{os.environ.get('KAFKA_PORT', '9092')}"
     topic = f"smoke-test-{uuid.uuid4().hex[:8]}"
     payload = uuid.uuid4().hex.encode()
 
@@ -121,7 +121,7 @@ async def check_postgres() -> str:
     import asyncpg
 
     conn = await asyncpg.connect(
-        host="localhost",
+        host="127.0.0.1",
         port=int(os.environ.get("POSTGRES_PORT", "5432")),
         user=os.environ.get("POSTGRES_USER", "simex"),
         password=os.environ.get("POSTGRES_PASSWORD", "simex"),
@@ -142,7 +142,7 @@ async def check_postgres() -> str:
 async def check_valkey() -> str:
     from valkey.asyncio import Valkey
 
-    client = Valkey(host="localhost", port=int(os.environ.get("VALKEY_PORT", "6379")))
+    client = Valkey(host="127.0.0.1", port=int(os.environ.get("VALKEY_PORT", "6379")))
     key = f"smoke-test:{uuid.uuid4().hex[:8]}"
     try:
         await client.set(key, "ok", ex=60)
