@@ -1,10 +1,15 @@
 # SimEx
 
-**A realistic, live practice market where anyone can test whether their AI can really trade.**
-Real Coinbase prices, simulated money, honest fills.
+**A personal, live practice market for testing whether an AI can really trade.**
+Live exchange prices, simulated money, honest fills.
 
-> **Status: planning (week 0).** Nothing trades yet. The plan, architecture and decisions are in
-> [`docs/`](docs/); the build follows the roadmap below. Watch the repo to follow along.
+> **Status: week 1, live data in.** Nothing trades yet. The plan, architecture and decisions are in
+> [`docs/`](docs/); the build follows the roadmap below.
+>
+> **Scope:** SimEx is a personal research tool. The code is open source; it runs as a private
+> instance for its owner and does not publish market data, recordings or leaderboards, because
+> exchange data terms allow personal use only ([ADR 0010](docs/adr/0010-personal-use-and-gemini-market-data.md)).
+> To run your own, you connect to the exchange yourself under its terms.
 
 ---
 
@@ -19,16 +24,16 @@ instantly at a perfect price. Both flatter the model:
   big orders at worse prices.
 
 SimEx is the honest test: a simulated exchange driven by the **live** order book, with fees,
-slippage, delay and partial fills, that any agent can plug into. Live forward-testing is the only
+slippage, delay and partial fills, that an agent plugs into. Live forward-testing is the only
 score that counts.
 
 ## How it works
 
 ```mermaid
 flowchart TD
-    CB["Coinbase live feed<br/>trades, level-2 book"] --> ING["Ingestor<br/>gap check + resync"]
+    CB["Exchange live feed (Gemini)<br/>trades, level-2 book"] --> ING["Ingestor<br/>venue adapters, gap check + resync"]
     ING --> K[("Kafka topics")]
-    K --> REC["Recorder<br/>Parquet, archived to home server"]
+    K --> REC["Recorder<br/>Parquet, private archive on home server"]
     K --> FL["Flink feature jobs<br/>candles, VWAP, volatility"]
     K --> BB["Order book builder"]
     FL --> R[("Valkey features")]
@@ -38,33 +43,35 @@ flowchart TD
     GW <--> ME
     ME --> L[("Ledger<br/>Postgres, append-only")]
     L --> EV["Evaluator<br/>Sharpe, drawdown, vs baselines"]
-    EV --> LB["Leaderboard site"]
+    EV --> LB["Private dashboard"]
     REC -. replay .-> ME
 ```
 
 - **Plug in three ways:** an MCP server (Claude and other MCP clients trade with zero code), a
   REST + WebSocket API with a Python SDK, or adapters for popular agent frameworks.
-- **Bring your own key:** agents run on your side with your own LLM key. SimEx never runs your code.
+- **Bring your own key:** agents run outside SimEx with their own LLM key. SimEx never runs agent code.
+- **Pluggable market sources:** each exchange is an adapter behind one envelope and topic layout, so
+  everything downstream is venue-independent.
 - **Fair under lag:** fills happen against the book when an order *arrives*, with a fixed anti-cheat
   delay so bots on faster direct feeds can't trade against a slightly stale book. Fills pause if the
   feed goes stale.
 - **Exactly-once ledger:** every fill is recorded once, money uses `Decimal`, and a reconciliation
   job proves balances.
-- **Replay Playground (v1.1):** practice on saved data with the same engine. Playground scores never
-  appear on the live leaderboard.
+- **Replay Playground (v1.1):** practice on saved data with the same engine. Playground scores are
+  kept separate from live forward-test scores.
 
 ## Roadmap
 
 | When | Phase | Gate (must pass to move on) |
 | --- | --- | --- |
 | Days 1–3 | Setup | Whole stack starts with one command |
-| Week 1 | Live data in | 24h run with no unrecovered gaps; book matches Coinbase snapshots |
+| Week 1 | Live data in | 24h run on Gemini with no unrecovered gaps; book matches fresh snapshots |
 | Week 2 | Exchange core | **Demo:** Claude trades live via MCP; ledger reconciles to the cent |
-| Week 3 | Plug-ins | An outside developer connects a bot using only the docs |
+| Week 3 | Plug-ins | A new agent connects using only the docs |
 | Week 4 | Features and agents | All agents run 72h unattended within the LLM cost cap |
-| Week 5 | Scoring and leaderboard | Public page shows live rankings and reasoning per trade |
-| Week 6 | Harden and launch | Deployed publicly; first outside agents on the leaderboard |
-| Week 7 | Replay Playground (v1.1) | Agents replay a past window; scores stay off the live board |
+| Week 5 | Scoring | Private scoreboard shows live rankings and reasoning per trade |
+| Week 6 | Harden and deploy | Runs 7 days unattended on Oracle; write-up of architecture and system metrics |
+| Week 7 | Replay Playground (v1.1) | Agents replay a past window; scores stay separate from live |
 
 Full task lists, risks and metrics: [`docs/PLAN.md`](docs/PLAN.md).
 
@@ -79,7 +86,7 @@ GitHub Actions
 ```
 simex/
 ├── src/simex/          Python services (one subpackage per component)
-│   ├── ingest/         Coinbase client, gap detection, resync
+│   ├── ingest/         Venue adapters (Gemini; Coinbase for research), gap detection, resync
 │   ├── book/           Order book builder
 │   ├── exchange/       Order gateway, matching engine, guards
 │   ├── ledger/         Event-sourced ledger and reconciliation
@@ -90,7 +97,7 @@ simex/
 │   ├── mcp/            MCP server
 │   └── playground/     Replay Playground (v1.1)
 ├── sdk/python/         Client SDK
-├── web/                Leaderboard site
+├── web/                Private dashboard
 ├── infra/              Prometheus config, Terraform (Cloudflare, Azure)
 ├── docs/               Plan and architecture decision records
 └── tests/
@@ -131,6 +138,10 @@ uses about 3 GB of the server's 12 GB, leaving room for the SimEx services.
 
 ### Coinbase ingestor
 
+> The Coinbase adapter is for feed research only: its terms forbid using the data to benchmark AI
+> agents, so it never feeds the matching engine or scoring ([ADR 0010](docs/adr/0010-personal-use-and-gemini-market-data.md)).
+> The Gemini adapter replaces it as the live source.
+
 `make ingest` (or `python -m simex.ingest`) connects to the public Coinbase WebSocket, subscribes
 to `level2`, `market_trades` and `heartbeats` for the configured pairs, and publishes every message
 to Kafka topics `md.level2`, `md.trades` and `md.heartbeats` (envelope format:
@@ -167,8 +178,9 @@ Architecture decisions are recorded in [`docs/adr/`](docs/adr/).
 
 ## Disclaimer
 
-SimEx is a simulation and research benchmark. It uses simulated money only, places no real orders,
-and nothing in it is financial or investment advice.
+SimEx is a simulation and personal research tool. It uses simulated money only, places no real
+orders, and nothing in it is financial or investment advice. It ships no market data; anyone running
+it connects to an exchange themselves and is responsible for following that exchange's terms.
 
 ## License
 
