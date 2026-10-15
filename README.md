@@ -163,15 +163,22 @@ python scripts/ingest_report.py --seconds 120   # msg/s, lag p50/p99, gaps, resy
 - **Snapshots:** every 30 minutes each product's snapshot is refreshed, one product at a time and
   10 minutes apart, so `md.level2` always holds a recent one to cold-start from; retention is 24 h
   / 2 GiB per partition by default ([ADR 0009](docs/adr/0009-book-cold-start-snapshot-refresh.md)).
-- **Liveness:** Gemini has no heartbeats channel, so the ingestor pings every 2 s and treats 5 s
-  without any message as a stale socket. `simex_ingest_ping_rtt_seconds` is the round trip.
+- **Liveness:** Gemini has no heartbeats channel, so the ingestor pings every 2 s and reconnects
+  after 5 s without a level2 message, ping reply or other control frame. Trades never count,
+  either way: pairs can go minutes without one. `simex_ingest_ping_rtt_seconds` is the round trip.
 - **Stale-data guards:** use `simex_ingest_last_message_age_seconds{venue,product_id,channel}`
-  with `simex_ingest_awaiting_snapshot{venue,product_id}`. Trades are rare on Gemini (about 5 a
-  minute per pair), so `market_trades` age reflects trading, not the feed.
+  with `simex_ingest_awaiting_snapshot{venue,product_id}`, on the `level2` channel. Trades are rare
+  on Gemini (one pair went 212 s without one), so `market_trades` age reflects trading, not the
+  feed, and must never drive a stale-data guard.
   `simex_ingest_time_since_last_snapshot_seconds` is the age of the book's baseline, not a
   staleness signal.
 - **Trades:** Gemini trade IDs are exchange-wide and not always in order, so lost trades can't be
   detected; consumers dedupe by trade ID (`simex.marketdata.TradeDeduper`).
+
+On Windows PowerShell, piping the ingestor's output with `2>&1` (for example
+`python -m simex.ingest 2>&1 | Tee-Object -FilePath ingest.log`) shows a red `NativeCommandError`
+on the first log line. That is harmless: PowerShell wraps the first line Python writes to stderr,
+where logging goes. The ingestor keeps running.
 
 Metrics carry a `venue` label and are at `http://127.0.0.1:9101/metrics`, scraped by Prometheus.
 Settings are environment variables listed in `.env.example`; the defaults suit the local stack.

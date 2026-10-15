@@ -41,7 +41,7 @@ from .envelope import (
 from .gemini import GeminiAdapter
 from .metrics import IngestMetrics
 from .resync import FaultInjector, GapRateMonitor, RateLimiter
-from .venue import HEARTBEATS, Anomaly, Parsed, VenueAdapter
+from .venue import HEARTBEATS, TRADES, Anomaly, Parsed, VenueAdapter
 
 log = logging.getLogger(__name__)
 
@@ -146,6 +146,9 @@ class Ingestor:
         # snapshot breaks no sequence on Gemini, so without this a book could wait forever.
         self.unsynced_on_connection: set[str] = set()
         self.connect_snapshot_deadline: float | None = None
+        # When the connection last showed it is alive: any frame except trades. Trades can go
+        # silent for minutes on Gemini, and a trickle of them must not hide a dead depth stream.
+        self.last_live = 0.0
 
         metrics.feed_gaps_last_minute.set_function(self.gap_rate.count)
         data_channels = [ch for ch in self.adapter.channels if ch != HEARTBEATS]
@@ -260,17 +263,16 @@ class Ingestor:
                 self.venue,
                 ", ".join(self.settings.pairs),
             )
-            last_message = self._mono()
+            self.last_live = self._mono()
             while True:
-                timeout = self._next_timeout(last_message)
+                timeout = self._next_timeout(self.last_live)
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
                 except TimeoutError:
                     raw = None
                 if raw is not None:
-                    last_message = self._mono()
                     await self.handle(raw)
-                elif self._mono() - last_message >= self.settings.stale_after_seconds:
+                if self._mono() - self.last_live >= self.settings.stale_after_seconds:
                     raise StaleFeed
                 await self._drive_resync(ws)
                 await self._drive_refresh(ws)
@@ -388,6 +390,7 @@ class Ingestor:
         """Process one WebSocket message: check it for gaps, measure lag, publish it."""
         received_at_ns = self._clock_ns()
         if self.injector.should_drop():
+            self.last_live = self._mono()  # it did arrive
             self._drop_for_fault_injection(raw)
             return []
         try:
@@ -400,6 +403,8 @@ class Ingestor:
         self._messages_on_connection += 1
 
         parsed = self.adapter.parse(message)
+        if not parsed.items or any(item.channel != TRADES for item in parsed.items):
+            self.last_live = self._mono()
         if parsed.error is not None:
             self.metrics.exchange_errors.inc()
             log.error("%s error: %s", self.venue, parsed.error)

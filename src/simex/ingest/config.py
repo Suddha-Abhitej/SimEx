@@ -24,7 +24,8 @@ class Settings:
     topic_partitions: int = 3
     topic_replication_factor: int = 1
     metrics_port: int = 9101
-    # No message at all for this long means the socket is stale (longest silence seen: 1 s).
+    # No level2 message, ping reply or control frame for this long means the socket is stale
+    # (longest level2 silence measured: 1 s). Trades never count: they can stop for minutes.
     stale_after_seconds: float = 5.0
     # Application-level ping on venues without a heartbeats channel (Gemini), so a healthy but
     # quiet connection always has traffic and its round trip is measured. 0 means off.
