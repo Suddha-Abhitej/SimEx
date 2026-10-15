@@ -14,14 +14,16 @@ authors = [{ name = "Abhitej S" }]
 dependencies = [
     "aiokafka>=0.11",
     "prometheus-client>=0.20",
+    "sortedcontainers>=2.4",
+    "valkey>=6",
     "websockets>=15",
 ]
 
 [project.optional-dependencies]
 dev = [
-    # Clients used by scripts/smoke_test.py against the local stack (aiokafka is a main dependency)
+    # Clients used by scripts/smoke_test.py against the local stack (aiokafka and valkey are main
+    # dependencies)
     "asyncpg>=0.29",
-    "valkey>=6",
     "pytest>=8",
     "hypothesis>=6",
     # Clock-offset check in tools/gemini_probe.py

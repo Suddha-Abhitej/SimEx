@@ -193,6 +193,31 @@ offset with NTP and prints corrected lag.
 > `SIMEX_VENUE=coinbase SIMEX_COINBASE_RESEARCH=1`, and publishes to `research.coinbase.md.*`
 > instead of `md.*`. Read it back with `python scripts/ingest_report.py --venue coinbase`.
 
+### Order book service
+
+`make book` (or `python -m simex.book`; Windows: `.\scripts\dev.ps1 book`) keeps one level-2 book per
+pair from `md.level2` and publishes it to Valkey every 250 ms
+([ADR 0012](docs/adr/0012-order-book-service-valkey-and-audit.md)). Run it next to the ingestor.
+
+```bash
+make ingest                                      # terminal 1
+make book                                        # terminal 2
+python scripts/book_report.py --seconds 60       # states, usability, counters (no prices)
+```
+
+- **The library** (`simex.book.OrderBook`) has no I/O and reads only `simex.marketdata` events.
+  Prices and sizes are `Decimal`, and queries raise `BookNotReady` unless the book is SYNCED. The
+  matching engine will embed it.
+- **Cold start:** the service reads `md.level2` from 2x the snapshot refresh interval ago (about
+  an hour), so a restart is SYNCED again within seconds (ADR 0009). Nothing is committed or
+  persisted.
+- **Valkey:** each pair is one JSON key, `simex:book:gemini:<pair>`, with a 2 s TTL. It holds the
+  state, best bid and ask, mid, spread, the top `BOOK_PUBLISH_DEPTH` (10) levels, the last update
+  ID and timestamps. **A reader may use it only if** the key exists, `state` is `SYNCED`,
+  `catching_up` is false and `received_at_ns` is less than 5 s old (`simex.book.record.usable`).
+- **Metrics** are at `http://127.0.0.1:9102/metrics`: book state, level counts, crossed books
+  (should stay 0), resyncs, apply latency and time since the last snapshot or update.
+
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 
 ## Decisions

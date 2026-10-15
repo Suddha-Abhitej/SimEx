@@ -1,5 +1,5 @@
 # Local stack shortcuts. On Windows without make, use scripts/dev.ps1 (same targets).
-.PHONY: up down logs ps smoke ingest
+.PHONY: up down logs ps smoke ingest book
 
 COMPOSE ?= docker compose
 PYTHON ?= python
@@ -19,5 +19,8 @@ ps:  ## Show services and health
 smoke:  ## Check Kafka, Postgres and Valkey from the host
 	$(PYTHON) scripts/smoke_test.py
 
-ingest:  ## Run the Coinbase ingestor against the local stack (metrics on :9101/metrics)
+ingest:  ## Run the market-data ingestor (Gemini) against the local stack (metrics on :9101/metrics)
 	$(PYTHON) -m simex.ingest
+
+book:  ## Run the order book service: md.level2 to Valkey (metrics on :9102/metrics)
+	$(PYTHON) -m simex.book

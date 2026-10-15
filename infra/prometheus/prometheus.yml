@@ -9,4 +9,8 @@ scrape_configs:
   - job_name: simex-ingest
     static_configs:
       - targets: ["host.docker.internal:9101"]
+  # The order book service, also on the host during development (make book).
+  - job_name: simex-book
+    static_configs:
+      - targets: ["host.docker.internal:9102"]
   # SimEx services (gateway, matching engine) are added here as they are built.
