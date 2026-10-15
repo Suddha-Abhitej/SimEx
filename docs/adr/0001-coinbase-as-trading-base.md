@@ -1,6 +1,6 @@
 # 0001. Coinbase is the trading base
 
-- **Status:** Accepted
+- **Status:** Superseded by [0010](0010-personal-use-and-gemini-market-data.md)
 - **Date:** 2026-10-13
 
 ## Context

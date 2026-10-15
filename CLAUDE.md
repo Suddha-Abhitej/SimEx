@@ -1,7 +1,7 @@
 # SimEx: guidance for Claude Code
 
-SimEx is a realistic, live practice market where anyone can test whether their AI can really
-trade: live Coinbase market data, simulated money, honest fills. Read `docs/PLAN.md` for scope and
+SimEx is a personal research tool for testing the owner's own AI traders against a live market:
+live Gemini market data, simulated money, honest fills (ADR 0010). Read `docs/PLAN.md` for scope and
 the build plan, and `docs/adr/` for decisions already made. Do not re-open an accepted ADR without
 saying so explicitly.
 
@@ -10,7 +10,14 @@ saying so explicitly.
 - **Money is `Decimal`, never float**, in the ledger, matching engine, fees and balances
   (ADR 0004). Serialize decimals as strings.
 - **Simulation only.** Never add code that places real orders or moves real money (ADR 0002).
-- **Only the ingestor talks to Coinbase.** Every other component reads from Kafka.
+- **Only the ingestor talks to an exchange.** Every other component reads from Kafka and must not
+  depend on which venue the data came from.
+- **Personal use only (ADR 0010).** No public leaderboard, public sign-up, downloadable recordings,
+  or public page showing market data or results derived from it. Any web UI is private.
+- **Never commit market data**: no recordings, feed dumps or fixtures copied from a live feed. Test
+  fixtures are hand-written or synthetic.
+- **Coinbase data never feeds agents, the matching engine or scoring** (its terms forbid using it
+  to benchmark AI agents). The Coinbase adapter is off by default and only for feed research.
 - **One writer per trading pair** in the matching engine; no shared mutable state across pairs.
 - **Never commit secrets**: no `.env`, keys (`*.key`, `*.pem`), tokens or passwords. Use
   `.env.example` for placeholders.
@@ -36,9 +43,12 @@ saying so explicitly.
 - Production target: Oracle Cloud Always Free, **ARM64 (aarch64), 2 cores, 12 GB RAM**. Every image
   must support `linux/arm64`, and every service needs a memory limit. Development also happens on
   x86 Windows laptops, so keep everything multi-arch.
-- Market data: Coinbase Advanced Trade WebSocket `wss://advanced-trade-ws.coinbase.com`, public
-  channels `level2`, `market_trades`, `heartbeats`, no auth. Pairs: BTC-USD, ETH-USD, SOL-USD.
-  The feed can drop messages: always check `sequence_num` and resync on gaps.
+- Market data: Gemini public WebSocket `wss://ws.gemini.com`, no auth. Pairs: BTCUSD, ETHUSD,
+  SOLUSD. Venue adapters live in `src/simex/ingest/` and all publish the same envelope and topics
+  (ADR 0007). Feeds can drop messages: always check the venue's sequence or update IDs and resync
+  on gaps (ADR 0008).
+- The Coinbase Advanced Trade adapter (`wss://advanced-trade-ws.coinbase.com`) stays for feed
+  research only (see hard rules).
 
 ## Commands
 
