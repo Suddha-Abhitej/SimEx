@@ -4,6 +4,11 @@ Gap handling (ADR 0008): sequence_num counts every message on the connection, so
 some message was lost but not which product it was for. On a gap the client publishes a resync
 marker per product to md.level2, a gap record to md.gaps, and unsubscribes and resubscribes
 level2 to get fresh snapshots, falling back to a reconnect if they don't arrive in time.
+
+Snapshot refresh (ADR 0009): Coinbase only sends snapshots on subscribe or resync, so the client
+also resyncs one product at a time on a schedule, giving md.level2 a recent snapshot for every
+product that a book builder can cold-start from. Refreshes are staggered so at most one book is
+resyncing, share the rate limiter with gap resyncs, and give way to a gap or disconnect.
 """
 
 from __future__ import annotations
@@ -58,7 +63,7 @@ class ResyncTimeout(Exception):
 @dataclass
 class Resync:
     id: str
-    trigger: str  # "gap" or "disconnect"
+    trigger: str  # "gap", "disconnect" or "refresh"
     started_mono: float
     method: str  # "resubscribe" or "reconnect": how the books are being recovered right now
     products: tuple[str, ...]
@@ -116,6 +121,8 @@ class CoinbaseIngestor:
         self._pending_disconnect: PendingDisconnect | None = None
         self._last_seen: tuple[int | None, int | None] = (None, None)
         self._messages_on_connection = 0
+        # When the next scheduled snapshot refresh is due; None until a connection is up.
+        self.next_refresh_at: float | None = None
 
         metrics.feed_gaps_last_minute.set_function(self.gap_rate.count)
         series = [(p, ch) for p in pairs for ch in ("level2", "market_trades")]
@@ -144,6 +151,20 @@ class CoinbaseIngestor:
     def _seconds_since_message(self, key: tuple[str, str]) -> float:
         last = self.last_message.get(key)
         return float("inf") if last is None else self._mono() - last
+
+    def _refresh_due_at(self) -> float | None:
+        """When the next refresh can start, or None while none is scheduled or a resync runs.
+
+        A gap or disconnect resync delivers fresh snapshots anyway, so refreshes wait for it.
+        """
+        if (
+            self.next_refresh_at is None
+            or self.resync is not None
+            or self.awaiting
+            or self.resubscribe_wanted
+        ):
+            return None
+        return max(self.next_refresh_at, self.limiter.ready_at())
 
     def _set_awaiting(self, products: set[str]) -> None:
         self.awaiting = products
@@ -195,6 +216,8 @@ class CoinbaseIngestor:
             self.resubscribe_wanted = False
             if self.resync is not None:
                 self.resync.resubscribed_at = None
+            if self.settings.snapshot_refresh_seconds > 0:
+                self.next_refresh_at = self._mono() + self.settings.refresh_stagger_seconds
             for channel in SUBSCRIBE_CHANNELS:
                 await self._send(ws, "subscribe", channel)
             log.info(
@@ -215,6 +238,7 @@ class CoinbaseIngestor:
                 elif self._mono() - last_message >= self.settings.stale_after_seconds:
                     raise StaleFeed
                 await self._drive_resync(ws)
+                await self._drive_refresh(ws)
 
     def _next_timeout(self, last_message: float) -> float:
         now = self._mono()
@@ -223,10 +247,15 @@ class CoinbaseIngestor:
             deadlines.append(self.limiter.ready_at())
         if self.resync is not None and self.resync.resubscribed_at is not None:
             deadlines.append(self.resync.resubscribed_at + self.settings.resync_timeout_seconds)
+        if (refresh_at := self._refresh_due_at()) is not None:
+            deadlines.append(refresh_at)
         return max(0.001, min(deadlines) - now)
 
-    async def _send(self, ws: Any, kind: str, channel: str) -> None:
-        message = {"type": kind, "product_ids": list(self.settings.pairs), "channel": channel}
+    async def _send(
+        self, ws: Any, kind: str, channel: str, products: tuple[str, ...] | None = None
+    ) -> None:
+        product_ids = list(self.settings.pairs if products is None else products)
+        message = {"type": kind, "product_ids": product_ids, "channel": channel}
         await ws.send(json.dumps(message))
 
     async def _drive_resync(self, ws: Any) -> None:
@@ -251,6 +280,50 @@ class CoinbaseIngestor:
             and self._mono() - resync.resubscribed_at >= self.settings.resync_timeout_seconds
         ):
             raise ResyncTimeout
+
+    async def _drive_refresh(self, ws: Any) -> None:
+        """Start the next scheduled snapshot refresh once it is due and the rate limit allows.
+
+        Each slot refreshes the product with the oldest snapshot, so with N pairs every product
+        is refreshed once per interval, interval / N apart. A slot whose oldest snapshot is
+        younger than the stagger (a gap resync just refreshed everything) is skipped.
+        """
+        due_at = self._refresh_due_at()
+        now = self._mono()
+        if due_at is None or now < due_at:
+            return
+        stagger = self.settings.refresh_stagger_seconds
+        product = min(self.settings.pairs, key=lambda p: self.last_snapshot.get(p, float("-inf")))
+        if now - self.last_snapshot.get(product, float("-inf")) < stagger:
+            self.next_refresh_at = now + stagger
+            return
+        if not self.limiter.try_acquire():
+            return
+        self.next_refresh_at = now + stagger
+        self.resync = Resync(
+            id=uuid.uuid4().hex,
+            trigger="refresh",
+            started_mono=now,
+            method="resubscribe",
+            products=(product,),
+            resubscribed_at=now,
+        )
+        self.metrics.resyncs.labels("resubscribe", "refresh").inc()
+        log.info("snapshot refresh: unsubscribing and resubscribing level2 for %s", product)
+        # The marker goes out first, so updates still in flight for this product are flagged.
+        await self._invalidate_books(self.resync.id, "refresh", self._clock_ns(), (product,))
+        await self._send(ws, "unsubscribe", "level2", (product,))
+        await self._send(ws, "subscribe", "level2", (product,))
+
+    def _supersede_refresh(self, *, timed_out: bool = False) -> None:
+        """A gap or disconnect resync takes over from a scheduled refresh in flight."""
+        if self.resync is None or self.resync.trigger != "refresh":
+            return
+        [product] = self.resync.products
+        outcome = "timeout" if timed_out else "superseded"
+        self.metrics.snapshot_refreshes.labels(product, outcome).inc()
+        log.warning("snapshot refresh for %s ended: %s", product, outcome)
+        self.resync = None
 
     # Messages ----------------------------------------------------------------------------------
 
@@ -379,6 +452,7 @@ class CoinbaseIngestor:
 
         detected_at_ns = self._clock_ns()
         pairs = self.settings.pairs
+        self._supersede_refresh()
         # The resync in flight still delivers valid snapshots for books it hasn't recovered yet,
         # so another resubscribe is only needed for books that had already recovered.
         in_flight = self.resync is not None and self.resync.resubscribed_at is not None
@@ -440,14 +514,22 @@ class CoinbaseIngestor:
             self.settings.gap_alert_per_minute,
         )
 
-    async def _invalidate_books(self, resync_id: str, reason: str, detected_at_ns: int) -> None:
-        for product in self.settings.pairs:
+    async def _invalidate_books(
+        self,
+        resync_id: str,
+        reason: str,
+        detected_at_ns: int,
+        products: tuple[str, ...] | None = None,
+    ) -> None:
+        products = self.settings.pairs if products is None else products
+        for product in products:
             await self._publish(build_resync_marker(product, resync_id, reason, detected_at_ns))
-        self._set_awaiting(set(self.settings.pairs))
+        self._set_awaiting(self.awaiting | set(products))
 
     async def _on_disconnect(self, *, fallback: bool) -> None:
         """Anything sent while disconnected is lost: invalidate the books and record the gap."""
         detected_at_ns = self._clock_ns()
+        self._supersede_refresh(timed_out=fallback)
         if self.resync is None:
             self.resync = Resync(
                 id=uuid.uuid4().hex,
@@ -493,6 +575,13 @@ class CoinbaseIngestor:
         resync, self.resync = self.resync, None
         self.resubscribe_wanted = False
         elapsed = self._mono() - resync.started_mono
+        if resync.trigger == "refresh":
+            [product] = resync.products
+            self.metrics.snapshot_refreshes.labels(product, "completed").inc()
+            self.metrics.snapshot_refresh_duration.labels(product).observe(elapsed)
+            self.metrics.last_snapshot_refresh_duration.labels(product).set(elapsed)
+            log.info("snapshot refresh: fresh snapshot for %s in %.0f ms", product, elapsed * 1000)
+            return
         self.metrics.resync_duration.labels(resync.method).observe(elapsed)
         log.warning(
             "resync via %s%s: snapshot received for %s in %.0f ms",

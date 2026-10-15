@@ -152,6 +152,10 @@ to `md.level2`, records the gap on `md.gaps`, and resubscribes level2 for fresh 
 back to a reconnect ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md)). To exercise
 that path against the live feed, set `SIMEX_INGEST_DROP_EVERY=500` (dev only; it drops every
 500th message on purpose).
+Every 30 minutes it also refreshes each product's snapshot, one product at a time and 10 minutes
+apart, so `md.level2` always holds a recent snapshot that a book builder can start from. It sets
+`md.level2` retention to 24 h / 2 GiB per partition by default
+([ADR 0009](docs/adr/0009-book-cold-start-snapshot-refresh.md)).
 
 For stale-data checks use `simex_ingest_last_message_age_seconds{product_id,channel}` together
 with `simex_ingest_awaiting_snapshot{product_id}`. Quiet products can go seconds without a trade,

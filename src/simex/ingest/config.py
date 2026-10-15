@@ -28,8 +28,24 @@ class Settings:
     resync_timeout_seconds: float = 10.0
     # More real gaps than this per minute suggests Coinbase changed its sequence semantics.
     gap_alert_per_minute: int = 10
+    # Refresh every product's level2 snapshot this often, one product at a time and staggered
+    # evenly, so md.level2 always holds a recent snapshot for cold starts (ADR 0009). 0 means off.
+    snapshot_refresh_seconds: float = 1800.0
+    # md.level2 retention, applied to the topic at startup. Must cover 2x the refresh interval.
+    level2_retention_hours: float = 24.0
+    # Per partition; -1 means no size limit.
+    level2_retention_bytes: int = 2 * 1024**3
     # Dev-only fault injector: drop every Nth received message. 0 means off.
     drop_every: int = 0
+
+    @property
+    def refresh_stagger_seconds(self) -> float:
+        """Time between two products' refreshes: the interval spread evenly over the pairs."""
+        return self.snapshot_refresh_seconds / max(1, len(self.pairs))
+
+    @property
+    def level2_retention_ms(self) -> int:
+        return round(self.level2_retention_hours * 3_600_000)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -62,5 +78,14 @@ class Settings:
                 get("INGEST_RESYNC_TIMEOUT_SECONDS", d.resync_timeout_seconds)
             ),
             gap_alert_per_minute=int(get("INGEST_GAP_ALERT_PER_MINUTE", d.gap_alert_per_minute)),
+            snapshot_refresh_seconds=float(
+                get("INGEST_SNAPSHOT_REFRESH_SECONDS", d.snapshot_refresh_seconds)
+            ),
+            level2_retention_hours=float(
+                get("INGEST_LEVEL2_RETENTION_HOURS", d.level2_retention_hours)
+            ),
+            level2_retention_bytes=int(
+                get("INGEST_LEVEL2_RETENTION_BYTES", d.level2_retention_bytes)
+            ),
             drop_every=int(get("SIMEX_INGEST_DROP_EVERY", d.drop_every)),
         )
