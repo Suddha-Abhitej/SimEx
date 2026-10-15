@@ -18,18 +18,19 @@ real Coinbase prices, fake money, honest fills.
 
 ## Assumptions and constraints
 
-The six-week timeline assumes 15 to 20 hours a week, a near-zero budget, and simulation-only use.
+The six-week timeline assumes 15 to 20 hours a week, a $0 hosting budget, and simulation-only use.
 Change any of these and the timeline moves.
 
 | Assumption | v1 value | Why |
 | --- | --- | --- |
 | Time | 15–20 hrs/week, about 6 weeks | Fits alongside other commitments |
-| Budget | Hosting under ~$50/month; LLM spend hard-capped | Users bring their own LLM keys |
+| Budget | **$0/month**: Oracle Always Free + free tiers; LLM spend hard-capped | Users bring their own LLM keys |
+| Hosting | Oracle Cloud Always Free Ampere A1 (ARM64, 2 cores, 12 GB, 200 GB disk) for production; home server (Ryzen 7, 16 GB, 2 TB) as archive and lab | See ADR 0006 |
 | Market venue | Coinbase Advanced Trade WebSocket, public market data, no auth | Binance.com blocks US IPs (HTTP 451) |
 | Pairs | BTC-USD, ETH-USD, SOL-USD | Deep books, busy around the clock |
 | Who runs agents | The user, on their side, with their own key | SimEx never executes strangers' code |
 | Money | Simulation only: no real orders, no copy-trading | Keeps it a benchmark, not financial advice |
-| Language and cloud | Python first, AWS | Strongest existing skills |
+| Language | Python first | Strongest existing skills |
 | Infrastructure memory | Kafka 1.25 GB, Postgres 1 GB, Valkey 256 MB, Prometheus 512 MB (Grafana 256 MB, opt-in) | About 3 GB of a 12 GB ARM64 host, leaving room for the services |
 
 ## Scope
@@ -75,10 +76,10 @@ latency. See the diagram in the [README](../README.md#how-it-works).
 | Market data | Coinbase ingestor with gap resync, Kafka topics, order book builder, recorder |
 | Exchange core | Order gateway, matching engine and fill simulator, stale-data guard, anti-cheat delay, ledger and reconciliation |
 | Plug-ins | MCP server, Python SDK, framework adapters, accounts and API keys |
-| Features and agents | Flink feature jobs, Redis, baseline agents, LLM reference agents with cost caps |
+| Features and agents | Flink feature jobs, Valkey, baseline agents, LLM reference agents with cost caps |
 | Scoring and site | Evaluator, leaderboard, per-agent pages, reasoning log |
 | Replay Playground | Window picker, speed control, run comparison, anonymous mode |
-| Platform and operations | Terraform, docker-compose, CI/CD, Prometheus, Grafana, backups, load tests |
+| Platform and operations | Docker Compose, Cloudflare Tunnel, Terraform (Cloudflare, Azure), CI/CD, Prometheus, Grafana, backups, load tests |
 
 ### Handling feed lag
 
@@ -107,24 +108,24 @@ for practice and live.
 
 ## Tech stack
 
-About 70% of the stack is existing ground (Python, FastAPI, Kafka, Postgres, Redis, Iceberg, Docker,
+About 70% of the stack is existing ground (Python, FastAPI, Kafka, Postgres, Valkey, Iceberg, Docker,
 MCP, an LLM gateway). The other 30% closes real gaps on purpose: Flink, Schema Registry,
 property-based testing and Next.js.
 
 | Component | Tools | Why |
 | --- | --- | --- |
 | Market data | Python websockets client, Apache Kafka (KRaft), Schema Registry with Avro, sortedcontainers for book levels | Schema evolution; fast book updates |
-| Recorder + playground | PyArrow to Parquet on S3, PyIceberg tables, DuckDB for loading replay windows | A past day loads in seconds |
+| Recorder + playground | PyArrow to zstd Parquet on local disk (~30 days on Oracle), nightly sync to the home server's 2 TB archive; PyIceberg, DuckDB for replay | Months of history at $0 |
 | Exchange core | Python asyncio (one writer per pair), FastAPI (REST + WebSocket), Pydantic, Python Decimal for all money | No race conditions; never floats for money |
 | Ledger | PostgreSQL append-only events, asyncpg, transactional outbox to Kafka | Exactly-once fills, provable balances |
-| Features | Apache Flink (Flink SQL / PyFlink), Redis | Event-time windows |
-| Plug-ins | MCP Python SDK, Python client SDK on PyPI, hashed API keys, Redis rate limiting | Zero-code access for MCP clients |
+| Features | Apache Flink (Flink SQL / PyFlink) or Python jobs first, Valkey | Event-time windows |
+| Plug-ins | MCP Python SDK, Python client SDK on PyPI, hashed API keys, Valkey rate limiting | Zero-code access for MCP clients |
 | Agents | LLM gateway pattern (or LiteLLM), Anthropic / OpenAI / Gemini SDKs, Ollama | Cost caps per agent |
 | Evaluation | Polars or pandas, NumPy, SciPy bootstrap tests | Significance vs baselines |
 | Website | Next.js + TypeScript, Tailwind, TradingView Lightweight Charts (open source) | Public pages with trading-style charts |
 | Monitoring | Prometheus, Grafana, OpenTelemetry, OpenLLMetry for agent LLM tracing | Lag, gaps, latency, LLM traces |
 | Testing | pytest, Hypothesis property-based tests, testcontainers, Locust or k6 | Ledger invariants checked over thousands of random order sequences |
-| Infra + delivery | Docker, docker-compose, Terraform, AWS EC2 + S3, GitHub Actions | One cheap host now, EKS-ready later |
+| Infra + delivery | Docker Compose on Oracle ARM64, Cloudflare Tunnel, Terraform, multi-arch images via GitHub Actions; website on Azure Static Web Apps | $0, portable to any host |
 | Project management | GitHub Projects, Issues, Milestones, decision records in `docs/adr` | Everything next to the code |
 
 ## Build plan
@@ -146,15 +147,15 @@ that must pass before the next phase starts.
 **Days 1–3 · Setup**
 
 - [ ] Repo, license, README skeleton, GitHub Actions
-- [ ] docker-compose: Kafka, Postgres, Valkey, Prometheus, Grafana
-- [ ] Terraform for one EC2 host and an S3 bucket
+- [x] docker-compose: Kafka, Postgres, Valkey, Prometheus, Grafana (#2)
+- [ ] Oracle Always Free server, data disk, Docker; Cloudflare Tunnel and domain (#1)
 
 **Week 1 · Live data in**
 
 - [ ] Coinbase WebSocket client: market trades, level 2, heartbeats
 - [ ] Sequence-gap detection and snapshot resync
 - [ ] Order book builder per pair; spot-check against Coinbase
-- [ ] Recorder to Parquet on S3, plus a replay reader
+- [ ] Recorder to zstd Parquet on local disk, plus a replay reader and nightly sync to the home server
 
 **Week 2 · Exchange core**
 
@@ -176,7 +177,7 @@ that must pass before the next phase starts.
 
 **Week 4 · Features and agents**
 
-- [ ] Flink jobs: 1m and 5m candles, VWAP, volatility, book imbalance into Redis
+- [ ] Flink jobs: 1m and 5m candles, VWAP, volatility, book imbalance into Valkey
 - [ ] Baselines: buy-and-hold, DCA, random, momentum
 - [ ] Three LLM reference agents on a fixed cadence, cost cap enforced
 
@@ -259,17 +260,18 @@ fill-accuracy check exists to catch it.
 | Scope creep | Never ships | v1 list frozen; new ideas go to a v2 column |
 | Read as financial advice | Legal and reputational risk | Simulation-only, clear disclaimers, no real-money or copy-trading features |
 | Abuse of the API | Outages, cost | API keys, rate limits, per-account caps |
-| Single host fails | Downtime | State rebuilt from Kafka + ledger; daily backups |
+| Single host fails | Downtime | State rebuilt from Kafka + ledger; nightly ledger backup off the box; home server as warm standby |
+| Oracle changes or reclaims the free tier | Server lost or shrunk | Everything in Docker Compose; move to the home server in about an hour |
 | No one shows up | Weak portfolio story | Weekly seasons, a bot posting notable trades, framework adapters, weekly build-in-public posts |
 
 ## Open decisions
 
 - [ ] Hours per week (sets the real timeline)
 - [ ] Final project name
-- [ ] Kafka or Redpanda
+- [x] Message bus: Kafka (KRaft)
 - [ ] Flink or Spark Structured Streaming
 - [ ] Frontend: Next.js or Streamlit for v1
-- [ ] Hosting: single EC2 host, a cheaper VPS, or EKS
+- [x] Hosting: Oracle Always Free + home server archive, $0 (ADR 0006)
 - [ ] Which three LLMs run as reference agents, and the monthly LLM cap
 - [ ] Launch channels (Bluesky, X, Hacker News, Medium)
 
