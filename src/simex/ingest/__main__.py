@@ -1,4 +1,8 @@
-"""Run the Coinbase ingestor: python -m simex.ingest"""
+"""Run the market-data ingestor: python -m simex.ingest
+
+SIMEX_VENUE picks the venue: gemini (default, the live venue) or coinbase (feed research only,
+needs SIMEX_COINBASE_RESEARCH=1, publishes to research.coinbase.md.*). See ADR 0010 and 0011.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +15,9 @@ import signal
 from prometheus_client import start_http_server
 
 from .backoff import Backoff
-from .client import CoinbaseIngestor
+from .client import Ingestor
 from .config import Settings
-from .envelope import GAPS_TOPIC, TOPICS
+from .envelope import Topics
 from .kafka import (
     create_producer,
     ensure_topics,
@@ -25,7 +29,7 @@ from .metrics import IngestMetrics
 log = logging.getLogger("simex.ingest")
 
 
-async def connect_kafka(settings: Settings):
+async def connect_kafka(settings: Settings, topics: Topics, channels: tuple[str, ...]):
     """Create topics and start the producer, retrying until Kafka is reachable."""
     backoff = Backoff(settings.backoff_initial_seconds, settings.backoff_max_seconds)
     while True:
@@ -33,11 +37,11 @@ async def connect_kafka(settings: Settings):
         try:
             await ensure_topics(
                 settings.kafka_bootstrap_servers,
-                [*TOPICS.values(), GAPS_TOPIC],
+                topics.for_channels(channels),
                 settings.topic_partitions,
                 settings.topic_replication_factor,
                 configs={
-                    TOPICS["level2"]: level2_topic_configs(
+                    topics.level2: level2_topic_configs(
                         settings.level2_retention_ms, settings.level2_retention_bytes
                     )
                 },
@@ -58,6 +62,10 @@ async def connect_kafka(settings: Settings):
 
 async def main() -> None:
     settings = Settings.from_env()
+    try:
+        settings.check()
+    except ValueError as exc:
+        raise SystemExit(f"simex.ingest: {exc}") from None
     if problem := level2_retention_problem(
         settings.level2_retention_ms, settings.snapshot_refresh_seconds
     ):
@@ -73,9 +81,19 @@ async def main() -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, task.cancel)
 
-    producer = await connect_kafka(settings)
+    producer = None
+    ingestor = Ingestor(settings, producer, metrics)
+    if ingestor.venue != "gemini":
+        log.warning(
+            "RESEARCH ONLY: %s data goes to %s and must never feed agents, matching or scoring "
+            "(ADR 0010)",
+            ingestor.venue,
+            ingestor.topics.level2.removesuffix("level2") + "*",
+        )
+    producer = await connect_kafka(settings, ingestor.topics, ingestor.adapter.channels)
+    ingestor.producer = producer
     try:
-        await CoinbaseIngestor(settings, producer, metrics).run()
+        await ingestor.run()
     finally:
         log.info("shutting down; flushing Kafka producer")
         await producer.stop()

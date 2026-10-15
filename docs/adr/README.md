@@ -15,3 +15,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0008](0008-gap-resync-markers-and-gap-records.md) | Gap resync: in-band markers on md.level2, gap records on md.gaps | Accepted |
 | [0009](0009-book-cold-start-snapshot-refresh.md) | Book cold start: staggered snapshot refresh and a time-based seek | Accepted |
 | [0010](0010-personal-use-and-gemini-market-data.md) | Personal research tool on Gemini market data | Accepted |
+| [0011](0011-venue-adapters-and-gemini-gap-rule.md) | Venue adapters, envelope v3, and Gemini's gap rule | Accepted |
