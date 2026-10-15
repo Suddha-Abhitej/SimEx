@@ -140,6 +140,10 @@ a stale socket, and logs sequence gaps. Metrics (messages, feed lag, gaps, recon
 `http://127.0.0.1:9101/metrics` and scraped by Prometheus. Settings are environment variables
 listed in `.env.example`; the defaults suit the local stack.
 
+Feed lag is local receive time minus the Coinbase timestamp, so it is only meaningful on an
+NTP-synced clock. A clock running behind shows up as negative lag (a laptop ~300 ms slow gave a
+p50 of -285 ms); check with `w32tm /query /status` on Windows or `timedatectl` on Linux.
+
 ```bash
 make ingest                                  # leave running
 python scripts/ingest_report.py --seconds 120   # msg/s, lag p50/p99, gaps, a sample trade

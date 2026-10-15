@@ -1,6 +1,6 @@
 # 0007. Market-data envelope and Kafka topics
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
 
 ## Context
@@ -52,5 +52,6 @@ needed to measure lag and detect gaps, and let the recorder store exactly what C
 - A message carrying several products is stored more than once; consumers must use the
   envelope's `product_id` and ignore other products' events in the payload.
 - Gap detection assumes `sequence_num` counts every message on the connection across all
-  channels, which is how `tools/feed_probe.py` treats it. A live run must confirm this before
-  issue #4 builds resync on it.
+  channels, which is how `tools/feed_probe.py` treats it. A 120-second live run (2,349 messages
+  across the three channels, one tracker) saw no gaps, which supports this; issue #4 builds
+  resync on it.
