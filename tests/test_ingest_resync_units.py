@@ -2,16 +2,12 @@ import json
 import logging
 
 import pytest
-from coinbase_samples import L2_SNAPSHOT, TRADES, raw
+from coinbase_samples import L2_SNAPSHOT, TRADES, build_envelopes, raw
 
 from simex.ingest.client import CoinbaseIngestor
+from simex.ingest.coinbase import snapshot_products
 from simex.ingest.config import Settings
-from simex.ingest.envelope import (
-    build_envelopes,
-    build_gap_record,
-    build_resync_marker,
-    snapshot_products,
-)
+from simex.ingest.envelope import build_gap_record, build_resync_marker, topics_for
 from simex.ingest.metrics import IngestMetrics
 from simex.ingest.resync import FaultInjector, GapRateMonitor, RateLimiter
 
@@ -29,10 +25,10 @@ class FakeClock:
 # Envelope v2 shapes ---------------------------------------------------------------------------
 
 
-def test_data_envelopes_are_version_2_with_a_type():
+def test_data_envelopes_are_version_3_with_a_type():
     [env] = build_envelopes(raw(TRADES), TRADES, RECEIVED)
     decoded = json.loads(env.value)
-    assert decoded["v"] == 2 and decoded["type"] == "data"
+    assert decoded["v"] == 3 and decoded["type"] == "data"
     assert "awaiting_snapshot" not in decoded  # level2 only
 
 
@@ -44,11 +40,19 @@ def test_level2_envelope_says_whether_its_product_awaits_a_snapshot():
 
 
 def test_resync_marker_shape():
-    marker = build_resync_marker("ETH-USD", "abc123", "sequence_gap", RECEIVED)
-    assert (marker.topic, marker.key) == ("md.level2", b"ETH-USD")
+    marker = build_resync_marker(
+        "ETH-USD",
+        "abc123",
+        "sequence_gap",
+        RECEIVED,
+        venue="coinbase",
+        topics=topics_for("coinbase"),
+    )
+    assert (marker.topic, marker.key) == ("research.coinbase.md.level2", b"ETH-USD")
     assert json.loads(marker.value) == {
-        "v": 2,
+        "v": 3,
         "type": "resync",
+        "venue": "coinbase",
         "received_at_ns": RECEIVED,
         "exchange_ts_ns": None,
         "channel": "level2",
@@ -62,12 +66,15 @@ def test_resync_marker_shape():
 def test_gap_record_shape():
     record = json.loads(
         build_gap_record(
+            venue="coinbase",
             gap_id="g1",
             reason="sequence_gap",
             products=("BTC-USD", "ETH-USD"),
             channels=("level2", "market_trades", "heartbeats"),
             expected_sequence=101,
             received_sequence=104,
+            missing_messages=3,
+            id_jump=None,
             start=(1, 2),
             end=(3, 4),
             detected_at_ns=5,
@@ -77,8 +84,9 @@ def test_gap_record_shape():
         )
     )
     assert record == {
-        "v": 1,
+        "v": 2,
         "type": "gap",
+        "venue": "coinbase",
         "gap_id": "g1",
         "reason": "sequence_gap",
         "products": ["BTC-USD", "ETH-USD"],
@@ -86,6 +94,7 @@ def test_gap_record_shape():
         "expected_sequence": 101,
         "received_sequence": 104,
         "missing_messages": 3,
+        "id_jump": None,
         "start_exchange_ts_ns": 1,
         "start_received_at_ns": 2,
         "end_exchange_ts_ns": 3,
@@ -186,7 +195,7 @@ def test_more_than_ten_real_gaps_a_minute_logs_an_error(caplog):
         ingestor._check_gap_rate()  # only one error per minute
     [error] = caplog.records
     assert "11 sequence gaps in the last minute" in error.message
-    assert "sequence_num semantics may have changed" in error.message
+    assert "coinbase's sequence semantics may have changed" in error.message
 
 
 def test_gap_during_resubscribe_in_flight_does_not_resubscribe_again():
@@ -195,20 +204,27 @@ def test_gap_during_resubscribe_in_flight_does_not_resubscribe_again():
     from test_ingest_end_to_end import FakeProducer
 
     from simex.ingest.client import Resync
-    from simex.ingest.sequence import SequenceAnomaly
+    from simex.ingest.venue import Anomaly
 
     producer = FakeProducer()
     ingestor = CoinbaseIngestor(Settings(), producer=producer, metrics=IngestMetrics())
     ingestor.resync = Resync("r1", "gap", 0.0, "resubscribe", ingestor.settings.pairs, 0.0)
     ingestor.limiter.try_acquire()  # the in-flight resubscribe used the limiter
 
-    asyncio.run(ingestor._on_anomaly(SequenceAnomaly("gap", 10, 12), "l2_data", (None, 1)))
+    gap = Anomaly(
+        "gap", ingestor.settings.pairs, "sequence_gap", expected=10, received=12, missing=2
+    )
+    asyncio.run(ingestor._on_anomaly(gap, (None, 1)))
 
     assert ingestor.resubscribe_wanted is False
-    [gap] = [json.loads(v) for t, _, v in producer.records if t == "md.gaps"]
+    [gap] = [json.loads(v) for t, _, v in producer.records if t == "research.coinbase.md.gaps"]
     assert gap["resync_action"] == "covered_by_resync_in_flight"
     assert gap["resync_id"] == "r1"
-    assert ingestor.metrics.registry.get_sample_value("simex_ingest_resyncs_suppressed_total") == 0
+    registry = ingestor.metrics.registry
+    assert (
+        registry.get_sample_value("simex_ingest_resyncs_suppressed_total", {"venue": "coinbase"})
+        == 0
+    )
 
 
 def test_last_message_age_per_product_and_channel():
@@ -226,7 +242,7 @@ def test_last_message_age_per_product_and_channel():
     def age(product, channel):
         return metrics.registry.get_sample_value(
             "simex_ingest_last_message_age_seconds",
-            {"product_id": product, "channel": channel},
+            {"venue": "coinbase", "product_id": product, "channel": channel},
         )
 
     # Every series exists from the start, at +Inf, so a guard never sees a missing series.

@@ -56,11 +56,11 @@ def test_gap_publishes_markers_resubscribes_and_recovers(caplog):
     with caplog.at_level(logging.INFO, logger="simex.ingest"):
         ingestor, producer, metrics = asyncio.run(run_against(fake, script))
 
-    level2 = records(producer, "md.level2")
+    level2 = records(producer, "research.coinbase.md.level2")
     markers = [r for r in level2 if r["type"] == "resync"]
     assert [m["product_id"] for m in markers] == list(PAIRS)
     assert len({m["resync_id"] for m in markers}) == 1
-    assert all(m["reason"] == "sequence_gap" and m["v"] == 2 for m in markers)
+    assert all(m["reason"] == "sequence_gap" and m["v"] == 3 for m in markers)
 
     # Order on md.level2: snapshots, BTC update, markers, ETH update flagged, fresh snapshots.
     after_markers = level2[level2.index(markers[-1]) + 1 :]
@@ -70,7 +70,7 @@ def test_gap_publishes_markers_resubscribes_and_recovers(caplog):
     assert [r["product_id"] for r in fresh] == list(PAIRS)
     assert all(r["awaiting_snapshot"] is False for r in fresh)
 
-    [gap] = records(producer, "md.gaps")
+    [gap] = records(producer, "research.coinbase.md.gaps")
     assert gap["reason"] == "sequence_gap"
     assert gap["missing_messages"] == 2
     assert gap["resync_action"] == "resubscribe"
@@ -115,7 +115,7 @@ def test_resubscribe_without_snapshot_falls_back_to_reconnect(caplog):
         "resync via reconnect (fallback after resubscribe timed out): snapshot received" in m
         for m in caplog.messages
     )
-    gaps = records(producer, "md.gaps")
+    gaps = records(producer, "research.coinbase.md.gaps")
     assert [g["reason"] for g in gaps] == ["sequence_gap", "disconnect"]
     assert gaps[1]["resync_id"] == gaps[0]["resync_id"]
     assert gaps[1]["end_received_at_ns"] >= gaps[1]["start_received_at_ns"]
@@ -139,7 +139,7 @@ def test_resyncs_are_rate_limited():
     first, second = fake.requests_of("unsubscribe", "level2")
     assert second[1] - first[1] >= 0.45
     assert sample(metrics, "simex_ingest_resyncs_suppressed_total") == 1
-    assert [g["resync_action"] for g in records(producer, "md.gaps")] == [
+    assert [g["resync_action"] for g in records(producer, "research.coinbase.md.gaps")] == [
         "resubscribe",
         "deferred",
     ]
@@ -154,7 +154,7 @@ def test_fault_injector_forces_a_gap_that_resyncs(caplog):
             await fake.trade("BTC-USD")
         await wait_until(lambda: ingestor.injector.dropped >= 1)
         await fake.trade("BTC-USD")
-        await wait_until(lambda: records(producer, "md.gaps"))
+        await wait_until(lambda: records(producer, "research.coinbase.md.gaps"))
         await wait_until(lambda: ingestor.resync is None and not ingestor.awaiting)
 
     with caplog.at_level(logging.WARNING, logger="simex.ingest"):
@@ -164,5 +164,5 @@ def test_fault_injector_forces_a_gap_that_resyncs(caplog):
     assert sample(metrics, "simex_ingest_fault_injected_drops_total") >= 1
     assert sample(metrics, "simex_ingest_gaps_total", kind="gap", cause="injected") >= 1
     assert sample(metrics, "simex_ingest_gaps_total", kind="gap", cause="feed") == 0
-    assert records(producer, "md.gaps")[0]["fault_injected"] is True
+    assert records(producer, "research.coinbase.md.gaps")[0]["fault_injected"] is True
     assert sample(metrics, "simex_ingest_feed_gaps_last_minute") == 0

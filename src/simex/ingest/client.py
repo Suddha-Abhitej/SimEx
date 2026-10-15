@@ -1,14 +1,16 @@
-"""Long-running Coinbase WebSocket client that publishes every market-data message to Kafka.
+"""Long-running market-data client that publishes every message from one venue to Kafka.
 
-Gap handling (ADR 0008): sequence_num counts every message on the connection, so a gap means
-some message was lost but not which product it was for. On a gap the client publishes a resync
-marker per product to md.level2, a gap record to md.gaps, and unsubscribes and resubscribes
-level2 to get fresh snapshots, falling back to a reconnect if they don't arrive in time.
+The core here is venue-neutral (ADR 0011); a VenueAdapter (Gemini, or Coinbase for research)
+knows the exchange. Gap handling (ADR 0008): when the adapter's gap rule finds lost data, the
+client publishes a resync marker for each affected product to the level2 topic, a gap record to
+the gaps topic, and asks the adapter for frames that resubscribe those products' level2 for fresh
+snapshots, falling back to a reconnect if they don't arrive in time. On Coinbase a gap affects
+every product (its counter is per connection); on Gemini, only the product whose IDs broke.
 
-Snapshot refresh (ADR 0009): Coinbase only sends snapshots on subscribe or resync, so the client
-also resyncs one product at a time on a schedule, giving md.level2 a recent snapshot for every
-product that a book builder can cold-start from. Refreshes are staggered so at most one book is
-resyncing, share the rate limiter with gap resyncs, and give way to a gap or disconnect.
+Snapshot refresh (ADR 0009): venues only send snapshots on subscribe or resync, so the client
+also resyncs one product at a time on a schedule, giving the level2 topic a recent snapshot for
+every product that a book builder can cold-start from. Refreshes are staggered so at most one book
+is resyncing, share the rate limiter with gap resyncs, and give way to a gap or disconnect.
 """
 
 from __future__ import annotations
@@ -26,24 +28,24 @@ import websockets
 from aiokafka.errors import KafkaError
 
 from .backoff import Backoff
+from .coinbase import CoinbaseAdapter
 from .config import Settings
 from .envelope import (
     GAPS_KEY,
-    GAPS_TOPIC,
     Envelope,
-    build_envelopes,
+    build_envelope,
     build_gap_record,
     build_resync_marker,
-    exchange_timestamp_ns,
-    snapshot_products,
+    topics_for,
 )
+from .gemini import GeminiAdapter
 from .metrics import IngestMetrics
 from .resync import FaultInjector, GapRateMonitor, RateLimiter
-from .sequence import SequenceAnomaly, SequenceTracker
+from .venue import HEARTBEATS, TRADES, Anomaly, Parsed, VenueAdapter
 
 log = logging.getLogger(__name__)
 
-SUBSCRIBE_CHANNELS = ("level2", "market_trades", "heartbeats")
+PING_SERIES = ("", "ping")  # last_message_age series for ping replies
 
 
 class Producer(Protocol):
@@ -82,13 +84,20 @@ class PendingDisconnect:
     reason: str = field(default="disconnect")
 
 
-class CoinbaseIngestor:
+def make_adapter(settings: Settings, injector: FaultInjector | None = None) -> VenueAdapter:
+    if settings.venue == "coinbase":
+        return CoinbaseAdapter(settings.pairs, injector)
+    return GeminiAdapter(settings.pairs)
+
+
+class Ingestor:
     def __init__(
         self,
         settings: Settings,
         producer: Producer,
         metrics: IngestMetrics,
         *,
+        adapter: VenueAdapter | None = None,
         connect: Callable[..., Any] = websockets.connect,
         clock_ns: Callable[[], int] = time.time_ns,
         monotonic: Callable[[], float] = time.monotonic,
@@ -105,8 +114,14 @@ class CoinbaseIngestor:
         self.backoff = backoff or Backoff(
             settings.backoff_initial_seconds, settings.backoff_max_seconds
         )
-        self.sequence = SequenceTracker()
         self.injector = FaultInjector(settings.drop_every)
+        self.adapter = adapter or make_adapter(settings, self.injector)
+        if isinstance(self.adapter, CoinbaseAdapter):
+            self.adapter.injector = self.injector
+        self.venue = self.adapter.venue
+        self.topics = topics_for(self.venue)
+        metrics.bind(self.venue)
+        self.url = settings.ws_url or self.adapter.default_url
         self.limiter = RateLimiter(settings.resync_min_interval_seconds, monotonic)
         self.gap_rate = GapRateMonitor(monotonic)
         self._last_gap_alarm: float | None = None
@@ -118,15 +133,31 @@ class CoinbaseIngestor:
         self.last_message: dict[tuple[str, str], float] = {}
         self.resync: Resync | None = None
         self.resubscribe_wanted = False
+        self.resubscribe_products: set[str] = set()
         self._pending_disconnect: PendingDisconnect | None = None
         self._last_seen: tuple[int | None, int | None] = (None, None)
         self._messages_on_connection = 0
         # When the next scheduled snapshot refresh is due; None until a connection is up.
         self.next_refresh_at: float | None = None
+        # Application-level ping (venues without a heartbeats channel).
+        self.next_ping_at: float | None = None
+        self.ping_sent_at: float | None = None
+        # Pairs with no snapshot yet on this connection, and when they must have one. A lost
+        # snapshot breaks no sequence on Gemini, so without this a book could wait forever.
+        self.unsynced_on_connection: set[str] = set()
+        self.connect_snapshot_deadline: float | None = None
+        # When the connection last showed it is alive: any frame except trades. Trades can go
+        # silent for minutes on Gemini, and a trickle of them must not hide a dead depth stream.
+        self.last_live = 0.0
 
         metrics.feed_gaps_last_minute.set_function(self.gap_rate.count)
-        series = [(p, ch) for p in pairs for ch in ("level2", "market_trades")]
-        for product, channel in [*series, ("", "heartbeats")]:
+        data_channels = [ch for ch in self.adapter.channels if ch != HEARTBEATS]
+        series = [(p, ch) for p in pairs for ch in data_channels]
+        if HEARTBEATS in self.adapter.channels:
+            series.append(("", HEARTBEATS))
+        if self._pings_enabled:
+            series.append(PING_SERIES)
+        for product, channel in series:
             metrics.last_message_age.labels(product, channel).set_function(
                 lambda key=(product, channel): self._seconds_since_message(key)
             )
@@ -143,6 +174,10 @@ class CoinbaseIngestor:
                 "!" * 72,
             ):
                 log.warning(line)
+
+    @property
+    def _pings_enabled(self) -> bool:
+        return self.settings.ping_interval_seconds > 0 and HEARTBEATS not in self.adapter.channels
 
     def _seconds_since_snapshot(self, product: str) -> float:
         last = self.last_snapshot.get(product)
@@ -191,12 +226,10 @@ class CoinbaseIngestor:
                 )
             except websockets.ConnectionClosed as exc:
                 reason = "closed"
-                log.warning("Coinbase closed the connection: %s", exc)
+                log.warning("%s closed the connection: %s", self.venue, exc)
             except (OSError, TimeoutError, websockets.InvalidHandshake) as exc:
                 reason = "connect_failed"
-                log.warning(
-                    "cannot connect to %s: %s: %s", self.settings.ws_url, type(exc).__name__, exc
-                )
+                log.warning("cannot connect to %s: %s: %s", self.url, type(exc).__name__, exc)
             finally:
                 self.metrics.connected.set(0)
             self.metrics.reconnects.labels(reason).inc()
@@ -208,37 +241,42 @@ class CoinbaseIngestor:
             await self._sleep(delay)
 
     async def _session(self) -> None:
-        async with self._connect(
-            self.settings.ws_url, max_size=None, open_timeout=15, ping_interval=20
-        ) as ws:
-            self.sequence.reset()
+        async with self._connect(self.url, max_size=None, open_timeout=15, ping_interval=20) as ws:
+            self.adapter.reset()
             # A fresh subscription sends fresh snapshots, so any earlier resubscribe is moot.
             self.resubscribe_wanted = False
+            self.resubscribe_products.clear()
             if self.resync is not None:
                 self.resync.resubscribed_at = None
+            now = self._mono()
             if self.settings.snapshot_refresh_seconds > 0:
-                self.next_refresh_at = self._mono() + self.settings.refresh_stagger_seconds
-            for channel in SUBSCRIBE_CHANNELS:
-                await self._send(ws, "subscribe", channel)
+                self.next_refresh_at = now + self.settings.refresh_stagger_seconds
+            self.ping_sent_at = None
+            self.next_ping_at = now + self.settings.ping_interval_seconds
+            self.unsynced_on_connection = set(self.settings.pairs)
+            self.connect_snapshot_deadline = now + self.settings.resync_timeout_seconds
+            for frame in self.adapter.connect_frames():
+                await ws.send(frame)
             log.info(
-                "subscribed to %s for %s",
-                ", ".join(SUBSCRIBE_CHANNELS),
+                "subscribed to %s on %s for %s",
+                ", ".join(self.adapter.channels),
+                self.venue,
                 ", ".join(self.settings.pairs),
             )
-            last_message = self._mono()
+            self.last_live = self._mono()
             while True:
-                timeout = self._next_timeout(last_message)
+                timeout = self._next_timeout(self.last_live)
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
                 except TimeoutError:
                     raw = None
                 if raw is not None:
-                    last_message = self._mono()
                     await self.handle(raw)
-                elif self._mono() - last_message >= self.settings.stale_after_seconds:
+                if self._mono() - self.last_live >= self.settings.stale_after_seconds:
                     raise StaleFeed
                 await self._drive_resync(ws)
                 await self._drive_refresh(ws)
+                await self._drive_ping(ws)
 
     def _next_timeout(self, last_message: float) -> float:
         now = self._mono()
@@ -247,27 +285,28 @@ class CoinbaseIngestor:
             deadlines.append(self.limiter.ready_at())
         if self.resync is not None and self.resync.resubscribed_at is not None:
             deadlines.append(self.resync.resubscribed_at + self.settings.resync_timeout_seconds)
+        if self.connect_snapshot_deadline is not None:
+            deadlines.append(self.connect_snapshot_deadline)
         if (refresh_at := self._refresh_due_at()) is not None:
             deadlines.append(refresh_at)
+        if self._pings_enabled and self.next_ping_at is not None:
+            deadlines.append(self.next_ping_at)
         return max(0.001, min(deadlines) - now)
 
-    async def _send(
-        self, ws: Any, kind: str, channel: str, products: tuple[str, ...] | None = None
-    ) -> None:
-        product_ids = list(self.settings.pairs if products is None else products)
-        message = {"type": kind, "product_ids": product_ids, "channel": channel}
-        await ws.send(json.dumps(message))
+    async def _send_frames(self, ws: Any, frames: list[str]) -> None:
+        for frame in frames:
+            await ws.send(frame)
 
     async def _drive_resync(self, ws: Any) -> None:
         """Send a wanted resubscribe once the rate limit allows; fall back if it times out."""
         if self.resubscribe_wanted and self.limiter.try_acquire():
+            products = tuple(p for p in self.settings.pairs if p in self.resubscribe_products)
             self.resubscribe_wanted = False
+            self.resubscribe_products.clear()
             log.warning(
-                "resync: unsubscribing and resubscribing level2 for %s",
-                ", ".join(self.settings.pairs),
+                "resync: unsubscribing and resubscribing level2 for %s", ", ".join(products)
             )
-            await self._send(ws, "unsubscribe", "level2")
-            await self._send(ws, "subscribe", "level2")
+            await self._send_frames(ws, self.adapter.resync_frames(products))
             self.metrics.resyncs.labels("resubscribe", "gap").inc()
             if self.resync is not None:
                 self.resync.method = "resubscribe"
@@ -280,6 +319,11 @@ class CoinbaseIngestor:
             and self._mono() - resync.resubscribed_at >= self.settings.resync_timeout_seconds
         ):
             raise ResyncTimeout
+        deadline = self.connect_snapshot_deadline
+        if deadline is not None and self._mono() >= deadline:
+            if self.unsynced_on_connection & self.awaiting:
+                raise ResyncTimeout
+            self.connect_snapshot_deadline = None
 
     async def _drive_refresh(self, ws: Any) -> None:
         """Start the next scheduled snapshot refresh once it is due and the rate limit allows.
@@ -312,8 +356,23 @@ class CoinbaseIngestor:
         log.info("snapshot refresh: unsubscribing and resubscribing level2 for %s", product)
         # The marker goes out first, so updates still in flight for this product are flagged.
         await self._invalidate_books(self.resync.id, "refresh", self._clock_ns(), (product,))
-        await self._send(ws, "unsubscribe", "level2", (product,))
-        await self._send(ws, "subscribe", "level2", (product,))
+        await self._send_frames(ws, self.adapter.resync_frames((product,)))
+
+    async def _drive_ping(self, ws: Any) -> None:
+        """Ping venues that have no heartbeats channel, so a quiet but healthy connection always
+        has traffic within the stale window, and record the round trip."""
+        now = self._mono()
+        if not self._pings_enabled or self.next_ping_at is None or now < self.next_ping_at:
+            return
+        frame = self.adapter.ping_frame()
+        if frame is None:
+            self.next_ping_at = None
+            return
+        self.ping_sent_at = now
+        # If no reply comes (lost or dropped by the fault injector), ping again after the stale
+        # window; a dead connection is caught by the stale timer, since nothing at all arrives.
+        self.next_ping_at = now + self.settings.stale_after_seconds
+        await ws.send(frame)
 
     def _supersede_refresh(self, *, timed_out: bool = False) -> None:
         """A gap or disconnect resync takes over from a scheduled refresh in flight."""
@@ -328,9 +387,10 @@ class CoinbaseIngestor:
     # Messages ----------------------------------------------------------------------------------
 
     async def handle(self, raw: str | bytes) -> list[Envelope]:
-        """Process one WebSocket message: check its sequence, measure lag, publish it."""
+        """Process one WebSocket message: check it for gaps, measure lag, publish it."""
         received_at_ns = self._clock_ns()
         if self.injector.should_drop():
+            self.last_live = self._mono()  # it did arrive
             self._drop_for_fault_injection(raw)
             return []
         try:
@@ -342,47 +402,67 @@ class CoinbaseIngestor:
             return []
         self._messages_on_connection += 1
 
-        if message.get("type") == "error":
-            self.metrics.coinbase_errors.inc()
-            log.error("Coinbase error: %s", message.get("message") or message)
+        parsed = self.adapter.parse(message)
+        if not parsed.items or any(item.channel != TRADES for item in parsed.items):
+            self.last_live = self._mono()
+        if parsed.error is not None:
+            self.metrics.exchange_errors.inc()
+            log.error("%s error: %s", self.venue, parsed.error)
             return []
-
-        try:
-            exchange_ts_ns = exchange_timestamp_ns(message)
-            bad_timestamp = None
-        except ValueError as exc:
-            exchange_ts_ns, bad_timestamp = None, exc
-        here = (exchange_ts_ns, received_at_ns)
+        here = (parsed.exchange_ts_ns, received_at_ns)
 
         if self._pending_disconnect is not None:
             await self._finish_disconnect_gap(here)
-
-        sequence_num = message.get("sequence_num")
-        if isinstance(sequence_num, int) and not isinstance(sequence_num, bool):
-            anomaly = self.sequence.observe(sequence_num)
-            if anomaly is not None:
-                await self._on_anomaly(anomaly, message.get("channel"), here)
+        for anomaly in parsed.anomalies:
+            await self._on_anomaly(anomaly, here)
         self._last_seen = here
 
-        # Checked after the sequence number so a dropped bad message isn't counted as a gap.
-        if bad_timestamp is not None:
-            log.warning("dropping message with a bad timestamp: %s", bad_timestamp)
+        if parsed.invalid is not None:
+            log.warning("dropping message: %s", parsed.invalid)
             return []
-
-        if message.get("channel") == "subscriptions":
+        if parsed.pong:
+            self._on_pong()
+            return []
+        if parsed.subscribed:
             self.metrics.connected.set(1)
-            log.info("subscriptions confirmed: %s", message.get("events"))
+            log.info("subscriptions confirmed by %s", self.venue)
             return []
+        return await self._publish_items(raw, parsed, received_at_ns)
 
-        snapshots = [p for p in snapshot_products(message) if p in self.settings.pairs]
+    def _on_pong(self) -> None:
+        now = self._mono()
+        if self.ping_sent_at is not None:
+            self.metrics.ping_rtt.set(now - self.ping_sent_at)
+        self.ping_sent_at = None
+        self.next_ping_at = now + self.settings.ping_interval_seconds
+        self.last_message[PING_SERIES] = now
+
+    async def _publish_items(
+        self, raw: str | bytes, parsed: Parsed, received_at_ns: int
+    ) -> list[Envelope]:
+        snapshots = [i.product_id for i in parsed.items if i.snapshot]
+        snapshots = [p for p in snapshots if p in self.settings.pairs]
         for product in snapshots:
             self.last_snapshot[product] = self._mono()
+            self.unsynced_on_connection.discard(product)
+        if not self.unsynced_on_connection:
+            self.connect_snapshot_deadline = None
         if snapshots and self.awaiting.intersection(snapshots):
             self._set_awaiting(self.awaiting.difference(snapshots))
 
-        envelopes = build_envelopes(raw, message, received_at_ns, self.awaiting)
+        envelopes = [
+            build_envelope(
+                raw,
+                item,
+                venue=self.venue,
+                topics=self.topics,
+                received_at_ns=received_at_ns,
+                exchange_ts_ns=parsed.exchange_ts_ns,
+                awaiting_snapshot=self.awaiting,
+            )
+            for item in parsed.items
+        ]
         if not envelopes:
-            log.debug("ignoring message on channel %r", message.get("channel"))
             return []
 
         # Data is flowing, so the next disconnect starts backing off from the beginning.
@@ -404,67 +484,80 @@ class CoinbaseIngestor:
         return envelopes
 
     def _drop_for_fault_injection(self, raw: str | bytes) -> None:
-        sequence_num = None
         try:
-            sequence_num = json.loads(raw).get("sequence_num")
-        except (ValueError, AttributeError):
-            pass
-        if not isinstance(sequence_num, int):
-            sequence_num = None
-        self.injector.record_dropped(sequence_num)
+            message = json.loads(raw)
+        except ValueError:
+            message = None
+        if isinstance(message, dict):
+            self.adapter.note_dropped(message)
+        sequence_num = message.get("sequence_num") if isinstance(message, dict) else None
         self.metrics.fault_injected_drops.inc()
         log.warning(
-            "FAULT INJECTOR: dropped received message #%d (sequence_num %s)",
+            "FAULT INJECTOR: dropped received message #%d%s",
             self.injector.received,
-            sequence_num,
+            f" (sequence_num {sequence_num})" if isinstance(sequence_num, int) else "",
         )
 
     # Gaps and resyncs ------------------------------------------------------------------------
 
-    async def _on_anomaly(
-        self, anomaly: SequenceAnomaly, channel: object, here: tuple[int | None, int | None]
-    ) -> None:
-        injected = anomaly.kind == "gap" and self.injector.caused(
-            anomaly.expected, anomaly.received
-        )
-        cause = "injected" if injected else "feed"
-        self.metrics.gaps.labels(anomaly.kind, cause).inc()
-        if anomaly.kind != "gap":
+    async def _on_anomaly(self, anomaly: Anomaly, here: tuple[int | None, int | None]) -> None:
+        if anomaly.kind == "gap":
+            await self._on_gap(anomaly, here)
+        elif anomaly.kind == "out_of_order":
+            self.metrics.gaps.labels("out_of_order", "feed").inc()
             log.warning(
-                "sequence out of order on %s: expected %d, got %d",
-                channel,
-                anomaly.expected,
-                anomaly.received,
+                "sequence out of order: expected %d, got %d", anomaly.expected, anomaly.received
             )
-            return
+        else:
+            for product in anomaly.products:
+                self.metrics.protocol_drift.labels(product, anomaly.kind).inc()
+            level = logging.ERROR if anomaly.alarm else logging.INFO
+            log.log(
+                level,
+                "%s protocol drift on %s: %s%s",
+                self.venue,
+                ", ".join(anomaly.products),
+                anomaly.kind,
+                " (never seen in the probe; see ADR 0011)" if anomaly.alarm else "",
+            )
 
-        self.metrics.missed_messages.inc(anomaly.missing)
+    async def _on_gap(self, anomaly: Anomaly, here: tuple[int | None, int | None]) -> None:
+        injected = anomaly.injected
+        self.metrics.gaps.labels("gap", "injected" if injected else "feed").inc()
+        if anomaly.missing is not None:
+            self.metrics.missed_messages.inc(anomaly.missing)
         log.warning(
-            "sequence gap%s on %s: expected %d, got %d (%d missing)",
+            "%s gap%s on %s: expected %s, got %s (%s)",
+            anomaly.reason,
             " (fault injector)" if injected else "",
-            channel,
+            ", ".join(anomaly.products),
             anomaly.expected,
             anomaly.received,
-            anomaly.missing,
+            f"{anomaly.missing} missing"
+            if anomaly.missing is not None
+            else f"ID jump {anomaly.id_jump}",
         )
         if not injected:
             self._check_gap_rate()
 
         detected_at_ns = self._clock_ns()
-        pairs = self.settings.pairs
+        products = anomaly.products
         self._supersede_refresh()
         # The resync in flight still delivers valid snapshots for books it hasn't recovered yet,
         # so another resubscribe is only needed for books that had already recovered.
         in_flight = self.resync is not None and self.resync.resubscribed_at is not None
-        needs_resubscribe = not in_flight or bool(set(pairs) - self.awaiting)
+        needs_resubscribe = not in_flight or bool(set(products) - self.awaiting)
         if self.resync is None:
             self.resync = Resync(
                 id=uuid.uuid4().hex,
                 trigger="gap",
                 started_mono=self._mono(),
                 method="resubscribe",
-                products=pairs,
+                products=products,
             )
+        else:
+            merged = set(self.resync.products) | set(products)
+            self.resync.products = tuple(p for p in self.settings.pairs if p in merged)
         if not needs_resubscribe:
             action = "covered_by_resync_in_flight"
         elif self.limiter.ready():
@@ -478,18 +571,22 @@ class CoinbaseIngestor:
             )
         if needs_resubscribe:
             self.resubscribe_wanted = True
+            self.resubscribe_products.update(products)
 
-        await self._invalidate_books(self.resync.id, "sequence_gap", detected_at_ns)
+        await self._invalidate_books(self.resync.id, anomaly.reason, detected_at_ns, products)
         await self._publish_raw(
-            GAPS_TOPIC,
+            self.topics.gaps,
             GAPS_KEY,
             build_gap_record(
+                venue=self.venue,
                 gap_id=uuid.uuid4().hex,
-                reason="sequence_gap",
-                products=pairs,
-                channels=SUBSCRIBE_CHANNELS,
+                reason=anomaly.reason,
+                products=products,
+                channels=self.adapter.gap_channels,
                 expected_sequence=anomaly.expected,
                 received_sequence=anomaly.received,
+                missing_messages=anomaly.missing,
+                id_jump=anomaly.id_jump,
                 start=self._last_seen,
                 end=here,
                 detected_at_ns=detected_at_ns,
@@ -509,9 +606,10 @@ class CoinbaseIngestor:
         self._last_gap_alarm = now
         log.error(
             "%d sequence gaps in the last minute with the fault injector off (limit %d): "
-            "Coinbase's sequence_num semantics may have changed (see ADR 0008)",
+            "%s's sequence semantics may have changed (see ADR 0008, ADR 0011)",
             count,
             self.settings.gap_alert_per_minute,
+            self.venue,
         )
 
     async def _invalidate_books(
@@ -523,7 +621,16 @@ class CoinbaseIngestor:
     ) -> None:
         products = self.settings.pairs if products is None else products
         for product in products:
-            await self._publish(build_resync_marker(product, resync_id, reason, detected_at_ns))
+            await self._publish(
+                build_resync_marker(
+                    product,
+                    resync_id,
+                    reason,
+                    detected_at_ns,
+                    venue=self.venue,
+                    topics=self.topics,
+                )
+            )
         self._set_awaiting(self.awaiting | set(products))
 
     async def _on_disconnect(self, *, fallback: bool) -> None:
@@ -541,6 +648,7 @@ class CoinbaseIngestor:
         else:
             self.resync.method = "reconnect"
             self.resync.fallback = self.resync.fallback or fallback
+            self.resync.products = self.settings.pairs
         self.metrics.resyncs.labels("reconnect", self.resync.trigger).inc()
         await self._invalidate_books(self.resync.id, "disconnect", detected_at_ns)
         self._pending_disconnect = PendingDisconnect(
@@ -553,15 +661,18 @@ class CoinbaseIngestor:
     async def _finish_disconnect_gap(self, here: tuple[int | None, int | None]) -> None:
         pending, self._pending_disconnect = self._pending_disconnect, None
         await self._publish_raw(
-            GAPS_TOPIC,
+            self.topics.gaps,
             GAPS_KEY,
             build_gap_record(
+                venue=self.venue,
                 gap_id=pending.gap_id,
                 reason=pending.reason,
                 products=self.settings.pairs,
-                channels=SUBSCRIBE_CHANNELS,
+                channels=self.adapter.channels,
                 expected_sequence=None,
                 received_sequence=None,
+                missing_messages=None,
+                id_jump=None,
                 start=pending.start,
                 end=here,
                 detected_at_ns=pending.detected_at_ns,
@@ -574,6 +685,7 @@ class CoinbaseIngestor:
     def _complete_resync(self) -> None:
         resync, self.resync = self.resync, None
         self.resubscribe_wanted = False
+        self.resubscribe_products.clear()
         elapsed = self._mono() - resync.started_mono
         if resync.trigger == "refresh":
             [product] = resync.products
@@ -614,3 +726,17 @@ class CoinbaseIngestor:
                 self.metrics.published.labels(topic).inc()
 
         future.add_done_callback(delivered)
+
+
+class CoinbaseIngestor(Ingestor):
+    """The ingestor with the Coinbase research adapter, whatever settings.venue says."""
+
+    def __init__(self, settings: Settings, producer: Producer, metrics: IngestMetrics, **kw):
+        super().__init__(settings, producer, metrics, adapter=CoinbaseAdapter(settings.pairs), **kw)
+
+
+class GeminiIngestor(Ingestor):
+    """The ingestor with the Gemini adapter, whatever settings.venue says."""
+
+    def __init__(self, settings: Settings, producer: Producer, metrics: IngestMetrics, **kw):
+        super().__init__(settings, producer, metrics, adapter=GeminiAdapter(settings.pairs), **kw)

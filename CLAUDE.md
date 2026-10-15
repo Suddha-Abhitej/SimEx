@@ -56,5 +56,6 @@ saying so explicitly.
 pip install -e ".[dev]"      # install with dev tools
 ruff check . && ruff format --check . && pytest
 docker compose up -d         # local infrastructure
-python tools/feed_probe.py --seconds 300   # measure live feed volume and lag
+python tools/gemini_probe.py --seconds 300   # measure Gemini's feed: volume, lag, update-ID rule
+python tools/feed_probe.py --seconds 300   # the same for Coinbase (research only)
 ```

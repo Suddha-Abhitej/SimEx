@@ -24,6 +24,8 @@ dev = [
     "valkey>=6",
     "pytest>=8",
     "hypothesis>=6",
+    # Clock-offset check in tools/gemini_probe.py
+    "ntplib>=0.4",
     "ruff>=0.6",
 ]
 

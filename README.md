@@ -136,43 +136,62 @@ On Windows without `make`, use `.\scripts\dev.ps1 up` (same targets: `up`, `down
 Ports bind to `127.0.0.1` only; on the server, reach them through an SSH tunnel. The default stack
 uses about 3 GB of the server's 12 GB, leaving room for the SimEx services.
 
-### Coinbase ingestor
+### Market-data ingestor
 
-> The Coinbase adapter is for feed research only: its terms forbid using the data to benchmark AI
-> agents, so it never feeds the matching engine or scoring ([ADR 0010](docs/adr/0010-personal-use-and-gemini-market-data.md)).
-> The Gemini adapter replaces it as the live source.
-
-`make ingest` (or `python -m simex.ingest`) connects to the public Coinbase WebSocket, subscribes
-to `level2`, `market_trades` and `heartbeats` for the configured pairs, and publishes every message
-to Kafka topics `md.level2`, `md.trades` and `md.heartbeats` (envelope format:
-[ADR 0007](docs/adr/0007-market-data-envelope-and-topics.md)).
-It creates the topics if missing, reconnects with jittered backoff, and treats 10s without a
-message as a stale socket. On a sequence gap or disconnect it publishes a resync marker per product
-to `md.level2`, records the gap on `md.gaps`, and resubscribes level2 for fresh snapshots, falling
-back to a reconnect ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md)). To exercise
-that path against the live feed, set `SIMEX_INGEST_DROP_EVERY=500` (dev only; it drops every
-500th message on purpose).
-Every 30 minutes it also refreshes each product's snapshot, one product at a time and 10 minutes
-apart, so `md.level2` always holds a recent snapshot that a book builder can start from. It sets
-`md.level2` retention to 24 h / 2 GiB per partition by default
-([ADR 0009](docs/adr/0009-book-cold-start-snapshot-refresh.md)).
-
-For stale-data checks use `simex_ingest_last_message_age_seconds{product_id,channel}` together
-with `simex_ingest_awaiting_snapshot{product_id}`. Quiet products can go seconds without a trade,
-so `market_trades` age reflects trading activity; `level2` and `heartbeats` age reflect the feed.
-`simex_ingest_time_since_last_snapshot_seconds` is not a staleness signal: Coinbase only sends a
-snapshot on subscribe, so it grows for as long as the connection is healthy. Metrics (messages, feed lag, gaps, reconnects) are at
-`http://127.0.0.1:9101/metrics` and scraped by Prometheus. Settings are environment variables
-listed in `.env.example`; the defaults suit the local stack.
-
-Feed lag is local receive time minus the Coinbase timestamp, so it is only meaningful on an
-NTP-synced clock. A clock running behind shows up as negative lag (a laptop ~300 ms slow gave a
-p50 of -285 ms); check with `w32tm /query /status` on Windows or `timedatectl` on Linux.
+`make ingest` (or `python -m simex.ingest`) streams one venue's public market data into Kafka.
+The live venue is **Gemini** (`SIMEX_VENUE=gemini`, the default): one connection to
+`wss://ws.gemini.com?snapshot=-1` with `{symbol}@depth@100ms` and `{symbol}@trade` for each pair,
+published to `md.level2` and `md.trades`, keyed by normalized product IDs (`BTC-USD`). Every venue
+sits behind the same adapter interface and envelope
+([ADR 0011](docs/adr/0011-venue-adapters-and-gemini-gap-rule.md), envelope v3 extends
+[ADR 0007](docs/adr/0007-market-data-envelope-and-topics.md)); consumers read payloads through
+`simex.marketdata.decode`, never a venue's raw format.
 
 ```bash
-make ingest                                  # leave running
-python scripts/ingest_report.py --seconds 120   # msg/s, lag p50/p99, gaps, a sample trade
+docker compose up -d                         # Kafka and the rest of the stack
+make ingest                                  # leave running (Gemini); Windows: .\scripts\dev.ps1 ingest
+python scripts/ingest_report.py --seconds 120   # msg/s, lag p50/p99, gaps, resyncs, counters
 ```
+
+- **Gaps** ([ADR 0011](docs/adr/0011-venue-adapters-and-gemini-gap-rule.md)): every Gemini diff must
+  start where the previous one ended (`U == previous u`). A break resyncs only that product: a
+  resync marker on `md.level2`, a record on `md.gaps`, and a resubscribe of its depth stream for a
+  fresh snapshot, falling back to a reconnect
+  ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md)). Anything else unexpected is
+  counted in `simex_ingest_protocol_drift_total` and logged as an error. To exercise the gap path,
+  set `SIMEX_INGEST_DROP_EVERY=500` (dev only; drops every 500th message on purpose).
+- **Snapshots:** every 30 minutes each product's snapshot is refreshed, one product at a time and
+  10 minutes apart, so `md.level2` always holds a recent one to cold-start from; retention is 24 h
+  / 2 GiB per partition by default ([ADR 0009](docs/adr/0009-book-cold-start-snapshot-refresh.md)).
+- **Liveness:** Gemini has no heartbeats channel, so the ingestor pings every 2 s and reconnects
+  after 5 s without a level2 message, ping reply or other control frame. Trades never count,
+  either way: pairs can go minutes without one. `simex_ingest_ping_rtt_seconds` is the round trip.
+- **Stale-data guards:** use `simex_ingest_last_message_age_seconds{venue,product_id,channel}`
+  with `simex_ingest_awaiting_snapshot{venue,product_id}`, on the `level2` channel. Trades are rare
+  on Gemini (one pair went 212 s without one), so `market_trades` age reflects trading, not the
+  feed, and must never drive a stale-data guard.
+  `simex_ingest_time_since_last_snapshot_seconds` is the age of the book's baseline, not a
+  staleness signal.
+- **Trades:** Gemini trade IDs are exchange-wide and not always in order, so lost trades can't be
+  detected; consumers dedupe by trade ID (`simex.marketdata.TradeDeduper`).
+
+On Windows PowerShell, piping the ingestor's output with `2>&1` (for example
+`python -m simex.ingest 2>&1 | Tee-Object -FilePath ingest.log`) shows a red `NativeCommandError`
+on the first log line. That is harmless: PowerShell wraps the first line Python writes to stderr,
+where logging goes. The ingestor keeps running.
+
+Metrics carry a `venue` label and are at `http://127.0.0.1:9101/metrics`, scraped by Prometheus.
+Settings are environment variables listed in `.env.example`; the defaults suit the local stack.
+Feed lag is local receive time minus the venue's timestamp, so it is only meaningful on an
+NTP-synced clock: a clock running behind shows up as negative lag. Check it with
+`w32tm /query /status` on Windows or `timedatectl` on Linux; `tools/gemini_probe.py` measures the
+offset with NTP and prints corrected lag.
+
+> **Coinbase is for feed research only.** Its terms forbid using the data to benchmark AI agents,
+> so it never feeds the book, matching engine or scoring
+> ([ADR 0010](docs/adr/0010-personal-use-and-gemini-market-data.md)). It runs only with
+> `SIMEX_VENUE=coinbase SIMEX_COINBASE_RESEARCH=1`, and publishes to `research.coinbase.md.*`
+> instead of `md.*`. Read it back with `python scripts/ingest_report.py --venue coinbase`.
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

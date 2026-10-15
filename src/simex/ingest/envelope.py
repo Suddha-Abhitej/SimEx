@@ -1,11 +1,16 @@
-"""Wrap raw Coinbase messages in the SimEx envelope published to Kafka (ADR 0007, ADR 0008).
+"""The SimEx market-data envelope and topics (ADR 0007, ADR 0008, ADR 0011).
 
-The envelope is JSON with a few metadata fields and the original WebSocket text spliced in
-byte for byte under "payload". The payload is never re-serialized, so prices and sizes stay the
-exact strings Coinbase sent and no value ever passes through a float.
+The envelope is JSON with a few metadata fields and the original WebSocket text spliced in byte
+for byte under "payload". The payload is never re-serialized, so prices and sizes stay the exact
+strings the venue sent and no value ever passes through a float.
 
-Version 2 adds "type": "data" for market data and "resync" for the markers published on
-md.level2 after a gap. Consumers must skip types they don't know. Gap records go to md.gaps.
+Version 2 added "type": "data" for market data and "resync" for the markers published on the
+level2 topic after a gap. Version 3 adds "venue", and on level2 "snapshot" (this message is a
+full book) and "update_ids" (the venue's [first, last] update IDs, or null). Consumers must skip
+types they don't know and should read payloads through simex.marketdata.decode.
+
+Gemini, the live venue, publishes to md.*. Any other venue publishes to research.<venue>.md.*,
+so research data (Coinbase, ADR 0010) can't reach the book or matching engine by mistake.
 """
 
 from __future__ import annotations
@@ -15,23 +20,38 @@ from collections.abc import Container, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-ENVELOPE_VERSION = 2
-GAP_RECORD_VERSION = 1
+from .venue import HEARTBEATS, LEVEL2, TRADES, Item
+
+ENVELOPE_VERSION = 3
+GAP_RECORD_VERSION = 2
+LIVE_VENUE = "gemini"
 HEARTBEAT_KEY = "heartbeat"
-GAPS_TOPIC = "md.gaps"
 GAPS_KEY = b"gap"
 
-# Coinbase names a subscription channel differently from the "channel" field of its messages.
-MESSAGE_CHANNELS = {
-    "l2_data": "level2",
-    "market_trades": "market_trades",
-    "heartbeats": "heartbeats",
-}
-TOPICS = {
-    "level2": "md.level2",
-    "market_trades": "md.trades",
-    "heartbeats": "md.heartbeats",
-}
+
+@dataclass(frozen=True)
+class Topics:
+    level2: str
+    trades: str
+    heartbeats: str
+    gaps: str
+
+    def for_channel(self, channel: str) -> str:
+        return {LEVEL2: self.level2, TRADES: self.trades, HEARTBEATS: self.heartbeats}[channel]
+
+    def for_channels(self, channels: Iterable[str]) -> list[str]:
+        """The data topics for these channels, then the gaps topic."""
+        return [self.for_channel(channel) for channel in channels] + [self.gaps]
+
+
+def topics_for(venue: str) -> Topics:
+    prefix = "" if venue == LIVE_VENUE else f"research.{venue}."
+    return Topics(
+        level2=f"{prefix}md.level2",
+        trades=f"{prefix}md.trades",
+        heartbeats=f"{prefix}md.heartbeats",
+        gaps=f"{prefix}md.gaps",
+    )
 
 
 @dataclass(frozen=True)
@@ -51,7 +71,7 @@ class Envelope:
 
 
 def parse_timestamp_ns(value: str) -> int:
-    """Parse a Coinbase RFC 3339 timestamp (up to nanoseconds, Z or offset) to epoch nanoseconds.
+    """Parse an RFC 3339 timestamp (up to nanoseconds, Z or offset) to epoch nanoseconds.
 
     datetime only keeps microseconds, so the fractional part is handled separately and exactly.
     """
@@ -77,116 +97,75 @@ def feed_lag_ns(received_at_ns: int, exchange_ts_ns: int | None) -> int | None:
     return received_at_ns - exchange_ts_ns
 
 
-def product_ids(message: dict) -> list[str]:
-    """Every product a market-data message carries, in first-seen order."""
-    seen: dict[str, None] = {}
-    for event in message.get("events") or []:
-        if not isinstance(event, dict):
-            continue
-        if product := event.get("product_id"):
-            seen[product] = None
-        for trade in event.get("trades") or []:
-            if isinstance(trade, dict) and (product := trade.get("product_id")):
-                seen[product] = None
-    return list(seen)
-
-
-def snapshot_products(message: dict) -> list[str]:
-    """Products that a level2 message carries a full snapshot for."""
-    if MESSAGE_CHANNELS.get(message.get("channel", "")) != "level2":
-        return []
-    return [
-        event["product_id"]
-        for event in message.get("events") or []
-        if isinstance(event, dict) and event.get("type") == "snapshot" and event.get("product_id")
-    ]
-
-
-def exchange_timestamp_ns(message: dict) -> int | None:
-    timestamp = message.get("timestamp")
-    return parse_timestamp_ns(timestamp) if isinstance(timestamp, str) else None
-
-
 def _header(**fields: object) -> bytes:
     return json.dumps({"v": ENVELOPE_VERSION, **fields}, separators=(",", ":")).encode()
 
 
-def build_envelopes(
+def build_envelope(
     raw: str | bytes,
-    message: dict,
+    item: Item,
+    *,
+    venue: str,
+    topics: Topics,
     received_at_ns: int,
+    exchange_ts_ns: int | None,
     awaiting_snapshot: Container[str] = (),
-) -> list[Envelope]:
-    """Envelopes to publish for one WebSocket message; empty if it is not market data.
-
-    A message normally carries one product. If it carries several, the unchanged message is
-    published once per product, keyed by that product, so every product's partition sees it.
-    Level2 envelopes say whether their product is still waiting for a snapshot after a gap.
-    """
-    channel = MESSAGE_CHANNELS.get(message.get("channel", ""))
-    if channel is None:
-        return []
-
-    exchange_ts_ns = exchange_timestamp_ns(message)
-    sequence_num = message.get("sequence_num")
-    if not isinstance(sequence_num, int) or isinstance(sequence_num, bool):
-        sequence_num = None
-
+) -> Envelope:
+    """The envelope for one item of a received message, with the raw text as its payload."""
+    fields: dict[str, object] = {
+        "type": "data",
+        "venue": venue,
+        "received_at_ns": received_at_ns,
+        "exchange_ts_ns": exchange_ts_ns,
+        "channel": item.channel,
+        "product_id": item.product_id or None,
+        "sequence_num": item.sequence_num,
+    }
+    if item.channel == LEVEL2:
+        fields["update_ids"] = list(item.update_ids) if item.update_ids else None
+        fields["snapshot"] = item.snapshot
+        fields["awaiting_snapshot"] = item.product_id in awaiting_snapshot
     raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8")
-    if channel == "heartbeats":
-        keys = [HEARTBEAT_KEY]
-    else:
-        keys = product_ids(message) or [""]
-
-    envelopes = []
-    for product in keys:
-        product_id = "" if channel == "heartbeats" else product
-        fields: dict[str, object] = {
-            "type": "data",
-            "received_at_ns": received_at_ns,
-            "exchange_ts_ns": exchange_ts_ns,
-            "channel": channel,
-            "product_id": product_id or None,
-            "sequence_num": sequence_num,
-        }
-        if channel == "level2":
-            fields["awaiting_snapshot"] = product_id in awaiting_snapshot
-        header = _header(**fields)
-        value = header[:-1] + b',"payload":' + raw_bytes + b"}"
-        envelopes.append(
-            Envelope(
-                topic=TOPICS[channel],
-                key=product.encode(),
-                value=value,
-                channel=channel,
-                product_id=product_id,
-                received_at_ns=received_at_ns,
-                exchange_ts_ns=exchange_ts_ns,
-                sequence_num=sequence_num,
-            )
-        )
-    return envelopes
+    header = _header(**fields)
+    key = HEARTBEAT_KEY if item.channel == HEARTBEATS else item.product_id
+    return Envelope(
+        topic=topics.for_channel(item.channel),
+        key=key.encode(),
+        value=header[:-1] + b',"payload":' + raw_bytes + b"}",
+        channel=item.channel,
+        product_id=item.product_id,
+        received_at_ns=received_at_ns,
+        exchange_ts_ns=exchange_ts_ns,
+        sequence_num=item.sequence_num,
+    )
 
 
 def build_resync_marker(
-    product_id: str, resync_id: str, reason: str, detected_at_ns: int
+    product_id: str,
+    resync_id: str,
+    reason: str,
+    detected_at_ns: int,
+    *,
+    venue: str,
+    topics: Topics,
 ) -> Envelope:
-    """Tell md.level2 consumers to discard this product's book and wait for the next snapshot."""
+    """Tell level2 consumers to discard this product's book and wait for the next snapshot."""
     value = _header(
         type="resync",
+        venue=venue,
         received_at_ns=detected_at_ns,
         exchange_ts_ns=None,
-        channel="level2",
+        channel=LEVEL2,
         product_id=product_id,
         sequence_num=None,
         resync_id=resync_id,
         reason=reason,
     )
     return Envelope(
-        topic=TOPICS["level2"],
+        topic=topics.level2,
         key=product_id.encode(),
         value=value,
-        channel="level2",
+        channel=LEVEL2,
         product_id=product_id,
         received_at_ns=detected_at_ns,
         exchange_ts_ns=None,
@@ -196,12 +175,15 @@ def build_resync_marker(
 
 def build_gap_record(
     *,
+    venue: str,
     gap_id: str,
     reason: str,
     products: Iterable[str],
     channels: Iterable[str],
     expected_sequence: int | None,
     received_sequence: int | None,
+    missing_messages: int | None,
+    id_jump: int | None,
     start: tuple[int | None, int | None],
     end: tuple[int | None, int | None],
     detected_at_ns: int,
@@ -209,24 +191,26 @@ def build_gap_record(
     resync_action: str,
     fault_injected: bool,
 ) -> bytes:
-    """A record for md.gaps. start and end are (exchange_ts_ns, received_at_ns) of the last
-    message before the gap and the first message after it; anything between them was lost."""
-    missing = (
-        received_sequence - expected_sequence
-        if expected_sequence is not None and received_sequence is not None
-        else None
-    )
+    """A record for the gaps topic. start and end are (exchange_ts_ns, received_at_ns) of the
+    last message before the gap and the first message after it; anything between them was lost.
+
+    missing_messages is null when the count can't be known: Gemini's update IDs are shared by
+    every market on the exchange, so id_jump says how far the IDs moved, not how many of this
+    product's updates were lost.
+    """
     return json.dumps(
         {
             "v": GAP_RECORD_VERSION,
             "type": "gap",
+            "venue": venue,
             "gap_id": gap_id,
             "reason": reason,
             "products": list(products),
             "channels": list(channels),
             "expected_sequence": expected_sequence,
             "received_sequence": received_sequence,
-            "missing_messages": missing,
+            "missing_messages": missing_messages,
+            "id_jump": id_jump,
             "start_exchange_ts_ns": start[0],
             "start_received_at_ns": start[1],
             "end_exchange_ts_ns": end[0],

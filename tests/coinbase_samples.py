@@ -70,3 +70,29 @@ def raw(message: dict, sequence_num: int | None = None) -> str:
     if sequence_num is not None:
         message = {**message, "sequence_num": sequence_num}
     return json.dumps(message, separators=(",", ":"))
+
+
+# Coinbase is research-only (ADR 0010): it publishes to research.coinbase.md.*.
+L2_TOPIC = "research.coinbase.md.level2"
+TRADES_TOPIC = "research.coinbase.md.trades"
+HEARTBEATS_TOPIC = "research.coinbase.md.heartbeats"
+GAPS_TOPIC = "research.coinbase.md.gaps"
+
+
+def build_envelopes(text: str, message: dict, received_at_ns: int, awaiting=()):
+    """The envelopes the ingestor publishes for one Coinbase message."""
+    from simex.ingest.coinbase import exchange_timestamp_ns, message_items
+    from simex.ingest.envelope import build_envelope, topics_for
+
+    return [
+        build_envelope(
+            text,
+            item,
+            venue="coinbase",
+            topics=topics_for("coinbase"),
+            received_at_ns=received_at_ns,
+            exchange_ts_ns=exchange_timestamp_ns(message),
+            awaiting_snapshot=awaiting,
+        )
+        for item in message_items(message)
+    ]
