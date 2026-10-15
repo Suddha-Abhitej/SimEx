@@ -116,7 +116,7 @@ ruff check . && ruff format --check . && pytest
 ```
 
 On Windows without `make`, use `.\scripts\dev.ps1 up` (same targets: `up`, `down`, `logs`, `ps`,
-`smoke`), or the plain `docker compose` commands.
+`smoke`, `ingest`), or the plain `docker compose` commands.
 
 | Service | Host port | Memory limit | Notes |
 | --- | --- | --- | --- |
@@ -128,6 +128,22 @@ On Windows without `make`, use `.\scripts\dev.ps1 up` (same targets: `up`, `down
 
 Ports bind to `127.0.0.1` only; on the server, reach them through an SSH tunnel. The default stack
 uses about 3 GB of the server's 12 GB, leaving room for the SimEx services.
+
+### Coinbase ingestor
+
+`make ingest` (or `python -m simex.ingest`) connects to the public Coinbase WebSocket, subscribes
+to `level2`, `market_trades` and `heartbeats` for the configured pairs, and publishes every message
+to Kafka topics `md.level2`, `md.trades` and `md.heartbeats` (envelope format:
+[ADR 0007](docs/adr/0007-market-data-envelope-and-topics.md)).
+It creates the topics if missing, reconnects with jittered backoff, treats 10s without a message as
+a stale socket, and logs sequence gaps. Metrics (messages, feed lag, gaps, reconnects) are at
+`http://127.0.0.1:9101/metrics` and scraped by Prometheus. Settings are environment variables
+listed in `.env.example`; the defaults suit the local stack.
+
+```bash
+make ingest                                  # leave running
+python scripts/ingest_report.py --seconds 120   # msg/s, lag p50/p99, gaps, a sample trade
+```
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 
