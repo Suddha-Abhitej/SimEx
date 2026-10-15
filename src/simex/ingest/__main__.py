@@ -13,7 +13,7 @@ from prometheus_client import start_http_server
 from .backoff import Backoff
 from .client import CoinbaseIngestor
 from .config import Settings
-from .envelope import TOPICS
+from .envelope import GAPS_TOPIC, TOPICS
 from .kafka import create_producer, ensure_topics
 from .metrics import IngestMetrics
 
@@ -28,7 +28,7 @@ async def connect_kafka(settings: Settings):
         try:
             await ensure_topics(
                 settings.kafka_bootstrap_servers,
-                TOPICS.values(),
+                [*TOPICS.values(), GAPS_TOPIC],
                 settings.topic_partitions,
                 settings.topic_replication_factor,
             )
