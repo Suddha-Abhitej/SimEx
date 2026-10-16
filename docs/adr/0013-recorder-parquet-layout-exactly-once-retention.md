@@ -64,7 +64,8 @@ an hour can have a second part; the offsets in the names keep them apart. `data/
    and the same call on Windows), fsync the directory. Windows can't fsync a directory, so there
    it is skipped (logged once at debug) and NTFS's journal covers the rename.
 2. Only then commit. A partition's commit is the lowest offset still in an open file on that
-   partition (BTC and SOL share one), or the position if none is open.
+   partition (two products can share one: live, ETH and SOL hash to the same
+   partition), or the position if none is open.
 3. The files are the source of truth, not the commit. At startup the recorder deletes every
    `.tmp` (never committed, so Kafka still has the records), reads each topic's `retention.ms`
    and scans the file names back that far plus a day (all of them for -1 or unknown), takes the
@@ -160,3 +161,17 @@ its hour plus the grace. Catching up on a backlog, that closed the file after ev
 that records the whole synthetic feed in batches of 200 got 216 files instead of 19. Files now
 close on the stream's position, or on the wall clock only when the partition is caught up; the
 same test gets 19, and so did a second real-Kafka run with `kill -9` and a restart.
+
+**Live validation, 2026-10-16** (Gemini, Windows laptop). The recorder started with a new group and
+caught up on the 36 hours Kafka still held in about 80 seconds, writing one file per product,
+channel and hour. Then it recorded 17:00 to 18:00 UTC live:
+
+- Each hour-17 file covers a contiguous offset range, and its rows add up to that range exactly
+  (87,919 rows, 6 files); duplicates on disk 0, lost offsets 0.
+- `replay_check`: PASS. All three books SYNCED from their first snapshot on, 0 crossed; 90 audits,
+  every audit row equal to its replay, 34 matched, 0 mismatched.
+- Disk: 23.0 MB for the hour, **0.553 GB/day**, inside the estimate (about 17 GB for 30 days).
+- Memory: peak **258 MB** working set during the 36-hour catch-up, 41 MB steady. The 384 MB
+  limit holds, with the catch-up as the case that sets it.
+- `simex_recorder_lag_seconds{channel="gaps"}` reads hours when no gap has happened, because it is
+  the age of the channel's last record. That's expected; `RecordingLagging` uses level2 only.
