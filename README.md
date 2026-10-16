@@ -90,7 +90,7 @@ simex/
 │   ├── book/           Order book builder
 │   ├── exchange/       Order gateway, matching engine, guards
 │   ├── ledger/         Event-sourced ledger and reconciliation
-│   ├── recorder/       Raw feed to Parquet/Iceberg, replay reader
+│   ├── recorder/       Raw feed to hourly Parquet, replay reader
 │   ├── features/       Flink feature jobs
 │   ├── agents/         Baseline and LLM reference agents
 │   ├── evaluator/      Scoring against baselines
@@ -123,7 +123,7 @@ ruff check . && ruff format --check . && pytest
 ```
 
 On Windows without `make`, use `.\scripts\dev.ps1 up` (same targets: `up`, `down`, `logs`, `ps`,
-`smoke`, `ingest`), or the plain `docker compose` commands.
+`smoke`, `ingest`, `book`, `record`), or the plain `docker compose` commands.
 
 | Service | Host port | Memory limit | Notes |
 | --- | --- | --- | --- |
@@ -232,6 +232,57 @@ python scripts/book_report.py --seconds 60       # states, usability, counters (
 - **Metrics** are at `http://127.0.0.1:9102/metrics`: book state, level counts, crossed books
   (should stay 0), audits, resyncs and resync requests, apply latency and time since the last
   snapshot or update.
+
+### Recorder and replay
+
+`make record` (or `python -m simex.recorder`; Windows: `.\scripts\dev.ps1 record`) writes
+`md.level2`, `md.trades` and `md.gaps` to hourly zstd Parquet files under `data/recordings/`,
+exactly once across crashes and restarts
+([ADR 0013](docs/adr/0013-recorder-parquet-layout-exactly-once-retention.md)). It never reads the
+`research.*` topics. **`data/` is gitignored: recordings are never committed (ADR 0010).**
+
+```bash
+make ingest                                      # terminal 1
+make record                                      # terminal 2
+python scripts/replay_check.py --last-hours 1    # after a full UTC hour: replay it and check it
+```
+
+- **Files:** one per product, channel and UTC hour,
+  `venue=gemini/channel=level2/date=2026-10-16/hour=17/product=BTC-USD/part-md.level2-p0-<first>-<last>.parquet`.
+  Each row keeps the Kafka record value byte for byte (the envelope with the venue's message), so
+  prices stay strings, plus header columns (`received_at_ns`, `type`, `update_first`/`update_last`,
+  `snapshot`, `awaiting_snapshot`, audit `aligned`/`reason`, partition, offset). An hour is a
+  `.tmp` while open and appears when it closes.
+- **Exactly once:** a file is fsynced and atomically renamed before its offsets are committed, and
+  at startup the file names say what is already on disk, so a crash at any point, or a consumer
+  group whose offsets expired, never loses or duplicates a record.
+- **Replay:** `simex.recorder.replay.read(root, start, end)` yields the recorded envelopes in each
+  product's original order, for the same `simex.marketdata.decode` and `OrderBook` code.
+  `scripts/replay_check.py` replays a window and checks that books are SYNCED after their first
+  snapshot, every recorded aligned audit still matches, and recorded and replayed audit counts
+  agree; it prints the window's size as GB/day, and no prices.
+- **Retention:** `RECORDER_RETENTION_DAYS` (30) days are kept. `RECORDER_REQUIRE_ARCHIVED=1` keeps
+  an expired day until the (future) nightly copy to the home server marks it `_ARCHIVED`. A day
+  that can't be deleted (a file held open on Windows) is retried on the next hourly pass and
+  counted in `simex_recorder_retention_errors_total`; recording carries on.
+- **Metrics** are at `http://127.0.0.1:9103/metrics`: records, lag in records and seconds per
+  channel, seconds since the last write and file, duplicates skipped, lost offsets. The
+  `RecordingLagging` alert looks at `md.level2` only (trades can be silent for minutes).
+
+Query recordings with DuckDB (`pip install -e ".[analysis]"`); counts only, no prices:
+
+```python
+import duckdb
+
+duckdb.sql("""
+    SELECT date, hour, channel, product, count(*) AS messages,
+           count(*) FILTER (WHERE type = 'audit') AS audits,
+           count(*) FILTER (WHERE type = 'resync') AS resyncs
+    FROM read_parquet('data/recordings/**/*.parquet', hive_partitioning = true)
+    WHERE channel <> 'gaps'
+    GROUP BY ALL ORDER BY ALL
+""").show()
+```
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

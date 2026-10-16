@@ -1,0 +1,53 @@
+# promtool test rules infra/prometheus/tests/recorder.test.yml (CI runs it; synthetic series)
+rule_files:
+  - ../rules/recorder.yml
+evaluation_interval: 1m
+tests:
+  # The recorder stalls at 10m: level2 lag climbs a minute a minute with records waiting.
+  - interval: 1m
+    input_series:
+      - series: 'simex_recorder_lag_seconds{channel="level2"}'
+        values: '0.2x10 60+60x20'
+      - series: 'simex_recorder_lag_records{topic="md.level2",partition="0"}'
+        values: '0x10 1700+1700x20'
+      - series: 'simex_recorder_lag_seconds{channel="market_trades"}'
+        values: '30x30'
+    alert_rule_test:
+      - eval_time: 12m  # 120 s behind only from ~12m, then 5 m of `for`
+        alertname: RecordingLagging
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: RecordingLagging
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "The recorder is 480 s behind md.level2"
+              description: "md.level2 has records the recorder hasn't read for over 2 minutes. Kafka keeps them (24 h by default), so nothing is lost yet; check the recorder's log and disk."
+
+  # Trades silent for 20 minutes while level2 keeps up: never an alert.
+  - interval: 1m
+    input_series:
+      - series: 'simex_recorder_lag_seconds{channel="level2"}'
+        values: '0.2x40'
+      - series: 'simex_recorder_lag_records{topic="md.level2",partition="0"}'
+        values: '0x40'
+      - series: 'simex_recorder_lag_seconds{channel="market_trades"}'
+        values: '0+60x40'
+      - series: 'simex_recorder_lag_records{topic="md.trades",partition="0"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: RecordingLagging
+        exp_alerts: []
+
+  # The ingestor stops: level2 lag grows but no records are waiting. Not the recorder's alert.
+  - interval: 1m
+    input_series:
+      - series: 'simex_recorder_lag_seconds{channel="level2"}'
+        values: '0+60x40'
+      - series: 'simex_recorder_lag_records{topic="md.level2",partition="0"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: RecordingLagging
+        exp_alerts: []

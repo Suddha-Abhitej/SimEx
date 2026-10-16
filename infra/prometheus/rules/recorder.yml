@@ -1,0 +1,19 @@
+# Recording lag (ADR 0013). Only md.level2 decides: Gemini's level2 moves every ~100 ms, while
+# market_trades can be silent for minutes, so a trades-based lag would cry wolf. The alert also
+# needs unread md.level2 records: if the ingestor stops, level2 lag grows but nothing is waiting,
+# and that is the ingestor's alert, not the recorder's.
+groups:
+  - name: simex-recorder
+    rules:
+      - alert: RecordingLagging
+        expr: >-
+          max(simex_recorder_lag_seconds{channel="level2"}) > 120
+          and on() sum(simex_recorder_lag_records{topic="md.level2"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The recorder is {{ $value | printf \"%.0f\" }} s behind md.level2"
+          description: >-
+            md.level2 has records the recorder hasn't read for over 2 minutes. Kafka keeps
+            them (24 h by default), so nothing is lost yet; check the recorder's log and disk.

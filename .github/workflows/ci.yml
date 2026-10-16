@@ -38,4 +38,9 @@ jobs:
               --entrypoint promtool prom/prometheus:v2.53.4 "$@"
           }
           promtool check config /etc/prometheus/prometheus.yml
-          promtool test rules /etc/prometheus/tests/book-audit.test.yml
+          # Expand the glob here, on the host; promtool gets the paths inside the container.
+          tests=()
+          for test in infra/prometheus/tests/*.test.yml; do
+            tests+=("/etc/prometheus/tests/$(basename "$test")")
+          done
+          promtool test rules "${tests[@]}"
