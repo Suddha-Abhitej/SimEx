@@ -12,7 +12,7 @@ from simex.exchange import (
     GateDecision,
     OrderStatus,
 )
-from simex.exchange.engine import CancelAttribution, EngineSettings, PairEngine
+from simex.exchange.engine import BookCross, CancelAttribution, EngineSettings, PairEngine
 from simex.marketdata import BookUpdate, ResyncMarker, Trade
 
 P = "BTC-USD"
@@ -229,9 +229,9 @@ def test_prints_on_the_other_side_or_at_worse_prices_do_nothing():
     assert o.filled_quantity == 0 and engine.resting[o.order_id].ahead == D("2")
 
 
-def test_the_venue_book_crossing_our_price_fills_as_maker():
+def test_under_fill_the_venue_book_crossing_our_price_fills_as_maker():
     # An improving bid inside a wide spread: no venue bid at its price, so it's alone there.
-    engine, writer, _ = make()
+    engine, writer, _ = make(book_cross=BookCross.FILL)
     engine.on_event(book(T0, [("100.00", "2")], [("100.10", "1")], snapshot=True))
     o = order(writer, engine, "l1", "buy", "limit", "1", "100.05")
     engine.advance(T0 + DELAY)
@@ -242,6 +242,34 @@ def test_the_venue_book_crossing_our_price_fills_as_maker():
     # The crossing ask is now used: another update elsewhere doesn't fill again.
     engine.on_event(book(T0 + DELAY + 2 * MS, bids=[("99.90", "1")]))
     assert o.filled_quantity == D("0.4")
+
+
+def test_by_default_a_cross_fills_nothing_and_puts_us_first_in_the_queue():
+    engine, writer, o = rest_bid()  # 1 at 100.00 with 2 ahead
+    assert engine.resting[o.order_id].ahead == D("2")
+    t = T0 + DELAY + MS
+    # The maker requotes: the bid at 100.00 goes, an ask appears at our price. No print.
+    engine.on_event(book(t, bids=[("100.00", "0")], asks=[("100.00", "3")]))
+    assert o.filled_quantity == 0 and engine.stats.counts["maker_fills:book_cross"] == 0
+    assert engine.resting[o.order_id].ahead == 0 and engine.resting[o.order_id].crossed
+    engine.on_event(book(t + MS, asks=[("100.00", "2")]))  # still crossed: counted once
+    assert engine.book.state is BookState.SYNCED
+    assert engine.stats.counts["crosses_marked"] == 1
+    # First in the queue for good: bids rejoin at our price behind us, a snapshot comes.
+    engine.on_event(book(t + 2 * MS, bids=[("100.00", "5")], asks=[("100.00", "0")]))
+    engine.on_event(book(t + 3 * MS, [("100.00", "5")], SNAP_ASKS, snapshot=True))
+    later = order(writer, engine, "l2", "buy", "limit", "1", "100.00", t=t + 3 * MS)
+    engine.advance(t + 3 * MS + DELAY)
+    assert engine.resting[o.order_id].ahead == 0
+    assert engine.resting[later.order_id].ahead == D("5")
+    # Only prints fill it: one at our price fills us before the later order.
+    engine.on_event(trade(t + 4 * MS + DELAY, "100.00", "0.6", "sell"))
+    assert fills(writer, o.order_id) == [(D("100.00"), D("0.6"), "print")]
+    assert later.filled_quantity == 0
+    # A print through our price fills the rest.
+    engine.on_event(trade(t + 5 * MS + DELAY, "99.95", "1", "sell"))
+    assert o.filled_quantity == 1
+    assert [c for _, _, c in fills(writer, o.order_id)] == ["print", "trade_through"]
 
 
 # Shrinks: fills or cancels -------------------------------------------------------------------
@@ -319,6 +347,16 @@ def test_prints_while_not_synced_are_ignored_and_counted_and_ahead_is_capped():
     assert engine.resting[o.order_id].ahead == D("0.5")  # min(2, new size)
 
 
+def test_prints_before_the_first_snapshot_are_counted_apart_from_a_resync():
+    engine, writer, _ = make()
+    engine.on_event(trade(T0, "100.00", "1", "sell"))  # no book yet: warm-up
+    engine.on_event(book(T0 + MS, SNAP_BIDS, SNAP_ASKS, snapshot=True))
+    engine.on_event(ResyncMarker("gemini", P, "r", "refresh", T0 + 2 * MS))
+    engine.on_event(trade(T0 + 3 * MS, "100.00", "2", "sell"))  # during a resync
+    q = engine.stats.quantities
+    assert (q["prints_before_first_snapshot"], q["prints_ignored_unsynced"]) == (D("1"), D("2"))
+
+
 def test_a_cancel_takes_effect_after_the_delay_and_fills_in_between_stand():
     engine, writer, o = rest_bid()
     t = T0 + DELAY + MS
@@ -345,12 +383,14 @@ def test_engine_settings_from_env():
             "EXCHANGE_DEPLETION_MAX_AGE_SECONDS": "3",
             "EXCHANGE_CANCEL_ATTRIBUTION": "pessimistic",
             "EXCHANGE_MATCH_WINDOW_MS_ETH_USD": "500",
+            "EXCHANGE_BOOK_CROSS": "fill",
         }
     )
     assert (s.match_window_ns, s.depletion_max_age_ns) == (150 * MS, 3_000_000_000)
     assert (s.window_ns("ETH-USD"), s.window_ns("BTC-USD")) == (500 * MS, 150 * MS)
     assert EngineSettings().window_ns("SOL-USD") == 300 * MS
     assert s.cancel_attribution is CancelAttribution.PESSIMISTIC
+    assert (s.book_cross, EngineSettings().book_cross) == (BookCross.FILL, BookCross.PRINT)
     assert EngineSettings.from_env({}) == EngineSettings()
 
 

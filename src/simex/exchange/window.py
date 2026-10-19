@@ -49,7 +49,8 @@ class PairWindow:
     deltas: list[tuple[int, Decimal]] = field(default_factory=list)  # (print - shrink ns, qty)
     shrink_log: dict = field(default_factory=lambda: defaultdict(list))  # (side, price) -> events
     print_log: dict = field(default_factory=lambda: defaultdict(list))
-    prints_skipped_unsynced: int = 0
+    prints_before_first_snapshot: int = 0
+    prints_skipped_unsynced: int = 0  # during a resync
 
     def matched_print_share(self, window_ms: int) -> Decimal:
         q = self.matchers[window_ms].quantities
@@ -135,6 +136,9 @@ def measure(values: Iterable[bytes], windows_ms=CANDIDATES_MS) -> dict[str, Pair
             elif isinstance(event, Trade):
                 if not dedupe.is_new(event) or event.aggressor not in ("buy", "sell"):
                     continue
+                if book.state is BookState.EMPTY:
+                    result.prints_before_first_snapshot += 1
+                    continue
                 if book.state is not BookState.SYNCED:
                     result.prints_skipped_unsynced += 1
                     continue
@@ -183,8 +187,9 @@ def format_report(pairs: dict[str, PairWindow]) -> str:
         wide = result.matchers[WIDE_MS]
         lines.append(
             f"{product}: {wide.counts['shrink']} shrinks, print quantity matched within "
-            f"{WIDE_MS} ms: {result.matched_print_share(WIDE_MS):.1%}; prints skipped (book not "
-            f"synced) {result.prints_skipped_unsynced}"
+            f"{WIDE_MS} ms: {result.matched_print_share(WIDE_MS):.1%}; prints skipped: before the "
+            f"first snapshot {result.prints_before_first_snapshot}, during a resync "
+            f"{result.prints_skipped_unsynced}"
         )
         if result.deltas:
             pct = ", ".join(

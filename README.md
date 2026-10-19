@@ -305,9 +305,9 @@ only (ADR 0002).
   separately.
 - **Fills** (`PairEngine`, one per pair): market orders and the crossing part of limits walk the
   book inside the band, with a depletion map so two orders can't take the same liquidity. Resting
-  limits queue at the back of their level and fill only from the venue's own activity: a print at
-  their price once the queue ahead has cleared, a print beyond it, or the venue's book crossing
-  their price. A level shrink that no print explains within W is a cancel, which moves the queue
+  limits queue at the back of their level and fill only from prints: one at their price once the
+  queue ahead has cleared, or one beyond it. The venue's book reaching their price fills nothing;
+  it puts them first in the queue (`EXCHANGE_BOOK_CROSS=fill` is the optimistic bracket). A level shrink that no print explains within W is a cancel, which moves the queue
   forward (proportionally by default; `EXCHANGE_CANCEL_ATTRIBUTION=pessimistic|optimistic`
   brackets it) but never fills anything. Fills pause while the book isn't SYNCED.
 - **W** is measured from the recordings, not guessed:
@@ -329,10 +329,13 @@ only (ADR 0002).
   python tools/fill_replay_check.py --start 2026-10-16T12:00 --hours 1
   ```
 
-  It replays a window through the engine under all three cancel modes, with minimum-size probe
-  orders every minute (passive at the best bid and ask, and a market buy and sell). It checks
-  that money is conserved and no balance goes negative, and reports fills by cause, the band's
-  binding rate, depletion expiries, ignored prints and the share of prints no shrink explains.
+  It replays a window through the engine under the three cancel modes (and under
+  `EXCHANGE_BOOK_CROSS=fill`), with minimum-size probe orders every minute: passive at the best
+  bid and ask, living 300 s, and a market buy and sell. It fails if money isn't conserved, a
+  balance goes negative, or the default's maker fills show markouts more than 1 bp better than
+  real prints' at the same price. It reports passive fill rates at 10, 60 and 300 s, fills by
+  cause, the band's binding rate, depletion expiries, ignored prints and the share of prints no
+  shrink explains.
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

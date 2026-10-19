@@ -6,7 +6,7 @@ from decimal import Decimal as D
 
 from simex.exchange.window import CANDIDATES_MS as CANDIDATE_WINDOWS
 from simex.exchange.window import WIDE_MS, format_report, measure
-from simex.ingest.envelope import build_envelope, topics_for
+from simex.ingest.envelope import build_envelope, build_resync_marker, topics_for
 from simex.ingest.venue import LEVEL2, TRADES, Item
 
 TOPICS = topics_for("gemini")
@@ -100,8 +100,14 @@ def test_prints_before_a_snapshot_and_while_resyncing_are_handled():
     values, _ = feed(fills=20, cancels=0)
     # Drop the snapshot: the book is never SYNCED, so every print is skipped, none matched.
     result = measure(values[1:])[P]
-    assert result.prints_skipped_unsynced == 20
+    assert (result.prints_before_first_snapshot, result.prints_skipped_unsynced) == (20, 0)
     assert result.matched_print_share(WIDE_MS) == 0 and result.chosen_ms() is None
+    # A resync after the snapshot: prints from then on are counted apart from the warm-up.
+    marker_at = T0 + 10_500 * MS  # after ten one-a-second fills
+    marker = build_resync_marker(P, "r1", "test", marker_at, venue="gemini", topics=TOPICS).value
+    stream = sorted([*values, marker], key=lambda v: json.loads(v)["received_at_ns"])
+    result = measure(stream)[P]
+    assert (result.prints_before_first_snapshot, result.prints_skipped_unsynced) == (0, 10)
 
 
 def test_no_w_is_chosen_when_prints_do_not_explain_shrinks():

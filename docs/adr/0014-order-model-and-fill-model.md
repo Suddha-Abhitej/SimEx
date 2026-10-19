@@ -88,9 +88,13 @@ improves on the best. It advances by:
 - **(a) a print at its price:** the print's quantity clears `ahead` first, then fills the order;
   our own orders at a price queue among themselves by arrival;
 - **(b) a trade-through:** a print beyond its price means the whole level traded, so it fills;
-- **(c) the venue book crossing its price:** the real opposite side reaching an order that sits
-  inside the spread would have traded with it on a real venue, so it fills as maker at its price,
-  up to the crossing size, recorded in the depletion map;
+- **(c) the venue book crossing its price:** the real opposite side reaching the order's price.
+  **This does not fill** (amended after the live check; see "Book cross: amended" below). The
+  order is marked crossed with nothing ahead of it, for good: under price-time priority, orders
+  that later join at its price queue behind it. From then on only prints at or through its price
+  fill it, through (a) and (b). `EXCHANGE_BOOK_CROSS=fill` keeps the original rule (it fills as
+  maker at its price, up to the crossing size, recorded in the depletion map) as the optimistic
+  bracket;
 - **(d) the level shrinking**, which is either a fill or a cancel.
 
 **What we can't know, and how each case is treated.** A Gemini fill shows twice: a print on
@@ -110,17 +114,18 @@ engine's own matcher at candidate windows, how much print quantity is matched an
 quantity is left unmatched. The rule that picks W, the result and the unmatched share at that W
 are in Measured below.
 
-**How pessimistic: no maker fill without a print.** A cancel only moves an order forward; only
-(a), (b) and (c) fill it. A cancel can bring an order to the front, but nothing fills until
-someone trades at or through its price, or the real book crosses it. Simulated maker volume from
-one print never exceeds the print. **Maker fills are counted by cause**, (a), (b) and (c)
-separately. (c) is the only cause that fills without a print, so an invented fill would hide
-there: if it ever dominates the mix, that is a red flag the report must show.
+**How pessimistic: no maker fill without a print.** A cancel only moves an order forward, and a
+cross only puts it first; only prints, (a) and (b), fill it. Nothing fills until someone trades
+at or through its price. Simulated maker volume from one print never exceeds the print. **Maker
+fills are counted by cause**, (a), (b) and (c) separately; under the default (c) is always 0, and
+under `fill` it is the only cause that fills without a print, so an invented fill would hide
+there.
 
 **After a resync** (30-minute refreshes, gaps) `ahead = min(ahead, new level size)`; rejoining the
 back at every refresh would wipe every resting order twice an hour. Prints that arrive while the
 book isn't SYNCED are ignored and **counted**, so the cost of that pessimism can be checked
-against the ~0.5 s refresh windows.
+against the ~0.5 s refresh windows. Prints before a pair's first snapshot (a replay or a restart
+warming up) are counted apart, so warm-up doesn't hide in that cost.
 
 **Not modelled in v1:** market impact (our orders never move the price, per the PLAN); our
 liquidity beyond the depletion map; virtual orders matching each other (they only ever trade with
@@ -149,12 +154,18 @@ simulated fill was worse for the trader).
 minutes: fill probability within 10, 60 and 300 s, time to fill, and markouts (mid move 1, 10 and
 60 s after a fill).
 
-- Hard invariant: no maker fill without a backing print or real crossing, and no more maker
-  volume per print than the print. Unacceptable: any violation.
-- Fills by cause, (a), (b) and (c), with (c)'s share as an explicit check.
-- The default fill rate must lie inside the pessimistic/optimistic bracket; all three are shown.
-- Adverse selection: simulated maker markouts must be no better than real prints' at the same
-  prices. Unacceptable: more than 1 bp better on average.
+- Hard invariant: no maker fill without a backing print (or, under `fill`, a real crossing), and
+  no more maker volume per print than the print. Unacceptable: any violation.
+- **The hard pass/fail for maker realism is adverse selection:** simulated maker markouts must be
+  no better than real prints' at the same side and price. Unacceptable: more than 1 bp better on
+  average at any horizon (with at least 20 matched fills; fewer are reported, not judged). A model
+  that fills us on the wrong prints, the ones before the price moves our way, fails here whatever
+  its fill rate.
+- Fills by cause, (a), (b) and (c). Under the default (c) is 0 by construction, so the rule
+  "(c) over half of maker fills fails" only guards against fill-on-cross becoming the default
+  again; under `fill` its share is shown.
+- The default fill rate must lie inside the pessimistic/optimistic bracket; all three are shown,
+  and they must visibly differ (D).
 
 **C. Known limit: prints the book never showed.** 17.3% / 12.8% / 5.1% of print quantity
 (BTC/ETH/SOL) matches no level shrink even within 5 s (Measured below): hidden or replenished
@@ -168,7 +179,16 @@ and per window, so a change in it is visible.
 W (Measured), so the proportional-cancel rule, not prints, is what moves a resting order to the
 front. The pessimistic and optimistic runs are therefore the main uncertainty in every maker
 number, not a side check: the report shows maker fill rate, time to fill and markouts under all
-three modes, and a result that only holds under one of them is reported as such.
+three modes, and a result that only holds under one of them is reported as such. With crosses no
+longer filling, queue position decides whether a print reaches an order, so the three modes must
+give visibly different results; identical results mean something else is short-circuiting the
+queue.
+
+`tools/fill_replay_check.py` is the first version of B on recordings: minimum-size passive probes
+at the best bid and ask every minute, each living 300 s, under the three cancel modes with
+`print` and under proportional with `fill`. It reports the fill rates at 10, 60 and 300 s and the
+cause mix, and fails on money, on the regression guard, or on the markout test against the
+default.
 
 A maker fill's price is its limit by construction, so A covers the PLAN's "price vs real prints
 in bps" and B covers whether and when makers fill.
@@ -196,6 +216,43 @@ This ADR changes two points of ADR 0005, explicitly (CLAUDE.md):
 The rest of ADR 0005 stands: fills at arrival plus a delay at least as long as feed lag, the
 stale-data guard, exchange timestamps for candles.
 
+### Book cross: amended after the live check
+
+**What the check found** (`tools/fill_replay_check.py`, 2026-10-16 12:00 to 13:00 UTC, with the
+original rule): book-cross fills were 97 to 100% of maker fills on all three pairs, and passive
+probes at the best bid and ask filled 87 to 92% of the time within a minute. The bracket brackets
+nothing: all three cancel modes gave identical results, because the cross filled the orders before
+queue position mattered.
+
+**Why (c) was kept, and what overturned it.** The owner argued for (c) on the ground that a real
+venue matches on arrival before any cancel, so liquidity that reaches our price would have traded
+with us. The measured book structure overturned it: about 99.9% of shrink quantity is cancels
+(Measured), so Gemini's book moves by requoting, not trading. When the price ticks down, a market
+maker typically cancels the bid at our price and posts an ask at that same price, with no trade.
+(c) assumed that ask would have hit us; a post-only ask, which market makers commonly use and
+Gemini supports, would have been rejected instead. The recording can't tell which.
+
+**The owner's reasoning, recorded alongside:** a resting order of ours at that price would have
+changed how the maker quoted. (c) is exactly where the no-market-impact assumption breaks: the
+arriving liquidity is a reaction to a book that, with our order in it, would not have looked the
+same. That makes it the least safe place in the model to invent liquidity.
+
+**Decision.** A cross alone no longer fills: it marks the order crossed with `ahead = 0`, kept
+for good, and only prints at or through its price fill it. `EXCHANGE_BOOK_CROSS=print|fill`,
+default `print`; `fill` is the optimistic bracket for the crossing liquidity, shown next to the
+cancel bracket. A variant that fills only when the price goes strictly through ours was rejected:
+it leaves the one-tick-or-more requote case, and a third cross mode would make the bracket report
+combinatorial.
+
+**What to expect, and what it means.** Passive fill rates fall from the 87 to 92% above. The
+result under the default, at 10, 60 and 300 s, is in Measured below, and it is a finding about the
+venue, not a defect of the simulator: Gemini prints only 4 to 11 times a minute per pair and its
+book moves by requoting, so a passive order at the touch rarely fills. If passive orders rarely
+fill, agents are pushed into taker orders at 120 bps; together with the fee finding (a round trip
+costs 1.8 to 2.4%), that bounds what SimEx can measure on this venue. **Strategies that need
+frequent passive fills cannot be evaluated honestly here, and a result that depends on them is
+reported as such.**
+
 ### Implementation (#8)
 
 `simex.exchange.PairEngine`, one per pair, owns its `OrderBook`, the depletion map, the resting
@@ -207,19 +264,22 @@ applies the event; `advance` does the same for quiet periods. Orders taking effe
 moment go in arrival order. Settings: `EXCHANGE_MATCH_WINDOW_MS` (W, 300; one pair with
 `EXCHANGE_MATCH_WINDOW_MS_<PAIR>`, e.g. `_ETH_USD`),
 `EXCHANGE_DEPLETION_MAX_AGE_SECONDS` (10), `EXCHANGE_CANCEL_ATTRIBUTION`
-(`proportional`, `pessimistic`, `optimistic`).
+(`proportional`, `pessimistic`, `optimistic`), `EXCHANGE_BOOK_CROSS` (`print`, `fill`).
 
 Counters (`PairEngine.stats`, counts and quantities), for the honesty report:
 `maker_fills:print`, `maker_fills:trade_through`, `maker_fills:book_cross`, `taker_fills`,
 `market_orders` and `band_binds` (the band's binding rate), `depletion_expired:venue_update`,
-`depletion_expired:snapshot`, `depletion_expired:age`, `prints_ignored_unsynced` (the cost of
-pausing while not SYNCED), `prints_no_aggressor`, `cancels:<mode>`, and
+`depletion_expired:snapshot`, `depletion_expired:age`, `crosses_marked`,
+`prints_ignored_unsynced` (the cost of pausing during a resync), `prints_before_first_snapshot`
+(warm-up, counted apart), `prints_no_aggressor`, `cancels:<mode>`, and
 `rejected_on_effect:<reason>`.
 
 ## Consequences
 
 - Taker fills are as honest as the audited book; maker fills are honest within a stated bracket,
-  and every maker fill traces to a print or a real crossing.
+  and under the default every maker fill traces to a print.
+- Passive orders rarely fill on Gemini; with the fees, that bounds what SimEx can measure here
+  (see "Book cross: amended").
 - Agents pay Gemini's real entry-tier fees, which will dominate most strategies; scores must
   separate gross, fees and net.
 - The account writer is a second kind of writer next to the pair engines, kept on purpose and
@@ -237,7 +297,8 @@ pausing while not SYNCED), `prints_no_aggressor`, `cancels:<mode>`, and
 
 **W, 2026-10-15T16:00 to 2026-10-16T20:00 UTC** (28 contiguous hours of Gemini recordings,
 `python tools/measure_fill_window.py --start 2026-10-15T16:00 --hours 28`; 2.9M / 3.6M / 2.2M level
-shrinks for BTC / ETH / SOL; prints skipped because the book wasn't SYNCED: 1 / 0 / 0).
+shrinks for BTC / ETH / SOL; prints skipped because the book wasn't SYNCED: 1 / 0 / 0, counted
+before warm-up and resyncs were split, so the 1 may be the window's start).
 
 Print time minus shrink time, quantity-weighted, ms:
 
@@ -290,3 +351,7 @@ pessimistic/optimistic bracket in the honesty report matters more than first ass
 **Prints the book never showed.** 17.3% / 12.8% / 5.1% of print quantity (BTC / ETH / SOL) has no
 matching shrink even within 5 s: the hidden or replenished liquidity this ADR anticipated, and a
 hard ceiling on what any book-based simulator can explain on this venue (C above).
+
+**Passive fill rates, under the default** (`EXCHANGE_BOOK_CROSS=print`): to be recorded from the
+re-run of `tools/fill_replay_check.py` over the same 28 hours, at 10, 60 and 300 s per pair and
+cancel mode, with the markout comparison.

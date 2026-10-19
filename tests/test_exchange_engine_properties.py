@@ -3,8 +3,8 @@
 After every market event:
 - money is conserved and no agent balance is negative (the order-model invariants still hold);
 - maker fills come only from the venue's activity: PRINT and TRADE_THROUGH fills only while a
-  print is being applied, BOOK_CROSS only while a book update is; and the maker volume one print
-  produces never exceeds that print;
+  print is being applied, BOOK_CROSS only while a book update is and only under
+  EXCHANGE_BOOK_CROSS=fill; and the maker volume one print produces never exceeds that print;
 - nothing fills while the book isn't SYNCED;
 - a taker fill happens only when an order takes effect, at a price on the book at that moment,
   and never takes more at a level than the level held (after depletion);
@@ -22,7 +22,7 @@ from test_exchange_properties import check_invariants
 
 from simex.book import BookState
 from simex.exchange import DEFAULT_INSTRUMENTS, AccountWriter, FeeSchedule, GateDecision
-from simex.exchange.engine import CancelAttribution, EngineSettings, PairEngine
+from simex.exchange.engine import BookCross, CancelAttribution, EngineSettings, PairEngine
 from simex.marketdata import BookUpdate, ResyncMarker, Trade
 
 P = "BTC-USD"
@@ -110,12 +110,14 @@ def snapshot_levels():
 class Run:
     """A market and orders driven through one engine, with every fill checked in context."""
 
-    def __init__(self, mode=CancelAttribution.PROPORTIONAL):
+    def __init__(self, mode=CancelAttribution.PROPORTIONAL, cross=BookCross.PRINT):
         gate = Gate()
         self.writer = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), gate, 200 * MS)
         for asset, amount in (("USD", "100000"), ("BTC", "100")):
             self.writer.accounts.deposit("alice", asset, D(amount))
-        self.engine = PairEngine(P, self.writer, EngineSettings(cancel_attribution=mode))
+        self.cross = cross
+        settings = EngineSettings(cancel_attribution=mode, book_cross=cross)
+        self.engine = PairEngine(P, self.writer, settings)
         gate.engine = self.engine
         self.now = T0
         self.ids = 0
@@ -206,6 +208,7 @@ class Run:
                 assert isinstance(event, Trade), f"a {cause} fill without a print"
                 maker_from_print += qty
             else:
+                assert self.cross is BookCross.FILL, "a book_cross fill under the print default"
                 assert isinstance(event, BookUpdate), "a book_cross fill without a book update"
             limit = order.request.limit_price
             if limit is not None:
@@ -225,11 +228,12 @@ class Run:
 @given(steps)
 def test_fills_come_only_from_the_market_and_money_is_conserved(seq):
     for mode in CancelAttribution:
-        run = Run(mode)
-        for s, dt in seq:
-            run.step(s, dt)
-        run.engine.advance(run.now + 10**9)
-        check_invariants(run.writer)
+        for cross in BookCross:
+            run = Run(mode, cross)
+            for s, dt in seq:
+                run.step(s, dt)
+            run.engine.advance(run.now + 10**9)
+            check_invariants(run.writer)
 
 
 @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])

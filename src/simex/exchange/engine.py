@@ -16,7 +16,10 @@ Fills:
 - Maker, by cause, and only ever from the venue's own activity:
   (a) PRINT: a print at the order's price clears `ahead`, then fills it;
   (b) TRADE_THROUGH: a print beyond the order's price fills it;
-  (c) BOOK_CROSS: the venue's opposite side reaching the order's price fills it at its price.
+  (c) BOOK_CROSS: the venue's opposite side reaching the order's price. By default
+  (EXCHANGE_BOOK_CROSS=print) this does not fill: the order is marked crossed with nothing ahead
+  of it, for good, and only prints at or through its price fill it. Under `fill` (the optimistic
+  bracket) the crossing liquidity fills it at its price.
   Maker volume from one print never exceeds the print, shared across our orders by price, then
   arrival.
 - Queues: `ahead` starts at the live size (back of the queue); prints reduce it; a shrink no
@@ -24,7 +27,7 @@ Fills:
   optimistic bracket setting); growth joins behind. After a snapshot,
   ahead = min(ahead, new size).
 - Paused while the book isn't SYNCED: orders taking effect are rejected and prints are ignored
-  (and counted).
+  (and counted: before the first snapshot apart from during a resync).
 """
 
 from __future__ import annotations
@@ -48,6 +51,13 @@ ZERO = Decimal(0)
 SECOND = 1_000_000_000
 
 
+class BookCross(StrEnum):
+    # The default: the crossing liquidity may have been post-only, and our order would have
+    # changed how the maker quoted, so a cross fills nothing; it puts us first in the queue.
+    PRINT = "print"
+    FILL = "fill"  # the optimistic bracket: the crossing order would have traded with ours
+
+
 class CancelAttribution(StrEnum):
     PROPORTIONAL = "proportional"  # the default: a cancel is equally likely anywhere in the queue
     PESSIMISTIC = "pessimistic"  # every cancel is behind us: fills come from prints alone
@@ -65,6 +75,7 @@ class EngineSettings:
     # next snapshot, or after this long, whichever is first.
     depletion_max_age_ns: int = 10 * SECOND
     cancel_attribution: CancelAttribution = CancelAttribution.PROPORTIONAL
+    book_cross: BookCross = BookCross.PRINT
 
     def window_ns(self, product_id: str) -> int:
         return self.match_window_ns_by_pair.get(product_id, self.match_window_ns)
@@ -96,6 +107,7 @@ class EngineSettings:
             cancel_attribution=CancelAttribution(
                 get("EXCHANGE_CANCEL_ATTRIBUTION", d.cancel_attribution.value)
             ),
+            book_cross=BookCross(get("EXCHANGE_BOOK_CROSS", d.book_cross.value)),
         )
 
 
@@ -112,6 +124,7 @@ class Resting:
     price: Decimal
     ahead: Decimal  # venue quantity in front of the order at its price
     seq: int  # arrival order among our orders at the same price
+    crossed: bool = False  # the venue's other side reached our price: first in the queue for good
 
 
 @dataclass
@@ -315,8 +328,11 @@ class PairEngine:
     def _on_print(self, trade: Trade) -> None:
         if not self.dedupe.is_new(trade):
             return
+        if self.book.state is BookState.EMPTY:
+            self.stats.add("prints_before_first_snapshot", trade.size)
+            return
         if self.book.state is not BookState.SYNCED:
-            self.stats.add("prints_ignored_unsynced", trade.size)
+            self.stats.add("prints_ignored_unsynced", trade.size)  # during a resync
             return
         if trade.aggressor not in ("buy", "sell"):
             self.stats.add("prints_no_aggressor", trade.size)
@@ -369,11 +385,15 @@ class PairEngine:
         return quantity
 
     def _cross(self, now: int) -> None:
-        """(c): the venue's opposite side reached a resting order's price. On a real venue the
-        arriving order would have traded with ours, so it fills as maker at our price, using
-        that liquidity (recorded in the depletion map)."""
+        """(c): the venue's opposite side reached a resting order's price.
+
+        print (default): nothing fills. The order is marked crossed with nothing ahead of it,
+        for good (later orders at its price queue behind it), and prints at or through its
+        price fill it. fill: the crossing liquidity fills it at its price, as if the arriving
+        order had traded with ours, and is recorded in the depletion map."""
         if self.book.state is not BookState.SYNCED:
             return
+        fill = self.settings.book_cross is BookCross.FILL
         for ours, book_side, levels in (
             (Side.BUY, "ask", self.book.asks),
             (Side.SELL, "bid", self.book.bids),
@@ -383,6 +403,17 @@ class PairEngine:
                 key=lambda r: (-r.price if ours is Side.BUY else r.price, r.seq),
             )
             for resting in orders:
+                if not fill:
+                    best = next(iter(levels), None)
+                    if best is None or (
+                        best > resting.price if ours is Side.BUY else best < resting.price
+                    ):
+                        break
+                    if not resting.crossed:
+                        resting.crossed = True
+                        resting.ahead = ZERO
+                        self.stats.add("crosses_marked")
+                    continue
                 for price, size in list(levels.items()):
                     crossing = (
                         price <= resting.price if ours is Side.BUY else price >= resting.price
