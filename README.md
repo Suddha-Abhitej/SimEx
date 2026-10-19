@@ -323,6 +323,16 @@ only (ADR 0002).
   `EXCHANGE_MATCH_WINDOW_MS_<PAIR>` for one pair). It also found that about 99.9% of shrink
   quantity is cancels, and that 5 to 17% of print quantity matches no visible shrink at all
   (ADR 0014, Measured).
+- **Checking the simulator on recordings:**
+
+  ```bash
+  python tools/fill_replay_check.py --start 2026-10-16T12:00 --hours 1
+  ```
+
+  It replays a window through the engine under all three cancel modes, with minimum-size probe
+  orders every minute (passive at the best bid and ask, and a market buy and sell). It checks
+  that money is conserved and no balance goes negative, and reports fills by cause, the band's
+  binding rate, depletion expiries, ignored prints and the share of prints no shrink explains.
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 
