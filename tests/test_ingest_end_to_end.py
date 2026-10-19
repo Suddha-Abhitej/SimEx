@@ -144,10 +144,11 @@ def test_silent_socket_is_treated_as_stale_and_reconnected():
 def test_connection_refused_backs_off_and_retries():
     async def scenario():
         producer, metrics = FakeProducer(), IngestMetrics()
-        # Nothing listens on this port, so every attempt fails.
+        # Nothing listens on this port, so every attempt fails. On Windows a refused connection
+        # takes about 2 s (the SYN is retried), so three attempts need more than the default.
         ingestor = make_ingestor("ws://127.0.0.1:9", producer, metrics)
         task = asyncio.create_task(ingestor.run())
-        await wait_until(lambda: ingestor.backoff.attempt >= 3)
+        await wait_until(lambda: ingestor.backoff.attempt >= 3, timeout=30)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         return metrics

@@ -25,6 +25,20 @@ jobs:
       - name: Test
         run: pytest
 
+  # Development happens on Windows laptops: run the tests there too, so Linux-only CI can't
+  # hide breakage on the machine the code is written on.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Test
+        run: pytest
+
   compose-config:
     runs-on: ubuntu-latest
     steps:
