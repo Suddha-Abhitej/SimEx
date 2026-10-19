@@ -15,7 +15,7 @@ groups:
           description: >-
             Records arrived after the watermark had passed their received time. Check
             simex_exchange_delivery_seconds against EXCHANGE_MERGE_HOLDBACK_MS and raise the
-            hold-back (it must stay below the order delay).
+            hold-back; the runner's log names each late record and its type.
       - alert: ExchangeWatermarkStalled
         expr: max(simex_exchange_watermark_lag_seconds) > 30
         for: 5m

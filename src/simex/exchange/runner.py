@@ -160,6 +160,7 @@ class ExchangeRunner:
         self.digests = HourDigests(settings.digest_path)
         self.watermarks: dict[str, int] = {}
         self.unparsed = 0
+        self._was_caught_up: set[tuple[str, int]] = set()  # at the previous fetch
 
     async def start(self) -> None:
         partitions = await self.source.start()
@@ -185,10 +186,15 @@ class ExchangeRunner:
     def handle(self, fetched: Fetched) -> None:
         """Merge one fetch and release what the watermarks allow."""
         caught_up = set(fetched.caught_up)
+        # Steady state only: a partition caught up at the previous fetch and still now. The
+        # fetch that ends a catch-up holds backlog records, whose delay is the backlog's age.
+        steady = caught_up & self._was_caught_up
+        self._was_caught_up = caught_up
         now = self._wall_ns()
         for record in fetched.records:
             try:
-                received = header(record.value)["received_at_ns"]
+                head = header(record.value)
+                received = head["received_at_ns"]
             except (Unrecordable, KeyError):
                 self.unparsed += 1
                 continue
@@ -199,8 +205,14 @@ class ExchangeRunner:
             arrival = Arrival(
                 record.topic, record.partition, record.offset, received, product, record.value
             )
-            self.bounds.consumed(arrival)
-            if (record.topic, record.partition) in caught_up:
+            if backstep := self.bounds.consumed(arrival):
+                log.warning(
+                    "%s p%d offset %d (%s, %s) was received %.0f ms before the record before it "
+                    "in its partition",
+                    record.topic, record.partition, record.offset, product,
+                    head.get("type", "data"), backstep / MS,
+                )  # fmt: skip
+            if (record.topic, record.partition) in steady:
                 self.metrics.delivery_seconds.labels(self.channel[record.topic]).observe(
                     max(0, now - received) / 1e9
                 )
@@ -211,6 +223,13 @@ class ExchangeRunner:
                 behind = max(merge.cleared, merge.released[0] if merge.released else 0)
                 self.metrics.late.labels(product, self.channel[record.topic]).inc()
                 self.metrics.late_seconds.observe(max(0, behind - received) / 1e9)
+                log.warning(
+                    "late: %s p%d offset %d (%s, %s) received %.0f ms below the watermark%s",
+                    record.topic, record.partition, record.offset, product,
+                    head.get("type", "data"), max(0, behind - received) / MS,
+                    "" if (record.topic, record.partition) in self._was_caught_up
+                    else " while catching up",
+                )  # fmt: skip
                 self._apply(arrival, late=True)
         for topic, partition in fetched.caught_up:
             self.bounds.caught_up(topic, partition, fetched.observed_wall_ns)
@@ -250,7 +269,8 @@ class ExchangeRunner:
         await self.start()
         try:
             while True:
-                self.handle(await self.source.fetch(timeout_ms=100))
+                # A short wait: an idle fetch's length adds to the watermark lag.
+                self.handle(await self.source.fetch(timeout_ms=self.settings.fetch_max_wait_ms))
         finally:
             self.digests.close_all()
             await self.source.stop()

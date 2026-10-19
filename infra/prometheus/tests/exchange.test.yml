@@ -20,7 +20,7 @@ tests:
           - exp_labels: {severity: warning}
             exp_annotations:
               summary: "3 records reached the engine out of replay order in 10 minutes"
-              description: "Records arrived after the watermark had passed their received time. Check simex_exchange_delivery_seconds against EXCHANGE_MERGE_HOLDBACK_MS and raise the hold-back (it must stay below the order delay)."
+              description: "Records arrived after the watermark had passed their received time. Check simex_exchange_delivery_seconds against EXCHANGE_MERGE_HOLDBACK_MS and raise the hold-back; the runner's log names each late record and its type."
       - eval_time: 25m
         alertname: ExchangeLateRecords
         exp_alerts: []

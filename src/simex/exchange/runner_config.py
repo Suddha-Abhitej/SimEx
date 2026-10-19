@@ -24,7 +24,7 @@ class RunnerSettings:
     # producer linger, the broker and the fetch wait below.
     holdback_ms: float = 100.0
     fetch_max_wait_ms: int = 20
-    # The anti-cheat delay (#10 makes it configurable); the hold-back must stay below it.
+    # The anti-cheat delay (#10 makes it configurable).
     order_delay_ms: float = 200.0
     # Per pair and UTC hour, the order the runner released records in (for the replay check).
     digest_path: str = "data/exchange/merge-digests.jsonl"
@@ -38,12 +38,8 @@ class RunnerSettings:
         return (self.level2_topic, self.trades_topic)
 
     def __post_init__(self) -> None:
-        if not 0 <= self.holdback_ms < self.order_delay_ms:
-            raise ValueError(
-                f"EXCHANGE_MERGE_HOLDBACK_MS ({self.holdback_ms}) must be below the order delay "
-                f"({self.order_delay_ms} ms): an order must reach the engine before its effective "
-                "time is cleared"
-            )
+        if self.holdback_ms < 0:
+            raise ValueError(f"EXCHANGE_MERGE_HOLDBACK_MS can't be negative ({self.holdback_ms})")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RunnerSettings:

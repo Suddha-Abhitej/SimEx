@@ -394,6 +394,15 @@ def test_engine_settings_from_env():
     assert EngineSettings.from_env({}) == EngineSettings()
 
 
+def test_an_order_reaching_the_engine_after_its_effective_time_is_refused():
+    engine, writer, _ = started()
+    engine.advance(T0 + 10 * DELAY)  # the engine is already past T0 + DELAY
+    o = order(writer, engine, "late", "buy", "limit", "1", "99.00", t=T0)
+    assert o.status is OrderStatus.REJECTED and o.order_id not in engine.pending
+    assert engine.stats.counts["rejected_on_effect:arrived_after_effective"] == 1
+    assert writer.accounts.balance("alice", "USD").reserved == 0
+
+
 def test_orders_for_another_pair_are_refused():
     engine, writer, _ = started()
     payload = {

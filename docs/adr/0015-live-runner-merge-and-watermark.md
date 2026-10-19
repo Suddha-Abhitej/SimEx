@@ -36,8 +36,10 @@ time of any record not yet consumed. Per partition:
 
 - **Behind** (records still to read): the received time of the last record consumed from it.
   The ingestor stamps `received_at_ns` and produces in receive order to one idempotent producer
-  (`acks=all`), so later offsets in a partition were received no earlier. The runner counts any
-  record that breaks this (`simex_exchange_out_of_order_records`); it should stay 0.
+  (`acks=all`, which keeps a partition's order across retries), so later offsets in a partition
+  were received no earlier. The runner counts any record that breaks this
+  (`simex_exchange_out_of_order_records`) and logs it with its type and how far below it fell.
+  The live run found one source: audits (below, Measured), fixed in the ingestor.
 - **Caught up** (read to the end at a fetch): the wall time just before that fetch minus the
   **hold-back** H. H covers the ingestor-to-consumer delay: the producer's 5 ms linger, the
   broker, and the consumer's fetch wait (20 ms, so a caught-up observation is never older than
@@ -62,10 +64,24 @@ already released, is applied at once, so the book stays right, and counted
 (`simex_exchange_late_events`, `simex_exchange_late_seconds`; the `ExchangeLateRecords` alert).
 At the chosen H the count must stay 0. Every record is applied exactly once, late or not.
 
-**H = 100 ms by default** (`EXCHANGE_MERGE_HOLDBACK_MS`), and it must stay below the order delay
-(200 ms): an order has to reach the engine before its effective time is cleared. The runner
-refuses to start otherwise. `simex_exchange_delivery_seconds` (consume time minus received time,
-on caught-up partitions) is what H has to cover.
+**H = 100 ms by default** (`EXCHANGE_MERGE_HOLDBACK_MS`). `simex_exchange_delivery_seconds`
+(consume time minus received time) is what H has to cover. It counts steady state only: records
+from a partition caught up at this fetch and the one before. The fetch that ends a catch-up
+carries backlog records whose "delay" is the backlog's age, so the catch-up after every start is
+left out, and the histogram's count is below `simex_exchange_events`. (The first version counted
+that fetch: on trades, a small topic whose whole backlog fits in it, 28.5% of the observations
+read over 5 s; on level2 only the last batch of the backlog did.)
+
+**The delay invariant** is that an order reaches the engine before the watermark passes its
+effective time; otherwise it would take effect against a later book. The first version said "H
+below the order delay", which is not it: the runner stamps an order when it arrives, and the
+watermark is always at least H behind the wall clock, so an order effective at arrival + 200 ms
+is never already cleared, whatever H is. What can break the invariant is transport: an order
+stamped elsewhere that reaches the engine more than the delay plus the watermark lag later.
+`PairEngine.submit` now refuses such an order (`rejected_on_effect:arrived_after_effective`)
+instead of applying it to the wrong book. The watermark lag is H plus the fetch's wait: the
+runner waits `EXCHANGE_FETCH_MAX_WAIT_MS` (20) per fetch, so about 120 to 130 ms. Every order
+takes effect, in wall terms, about the delay plus that lag after it was submitted.
 
 **Cold start**, as the book service does it (ADR 0009): both topics from two snapshot-refresh
 intervals ago, so every partition starts behind and the backlog merges exactly. The end offsets
@@ -92,8 +108,8 @@ what happens on another.
 - A live engine applies exactly replay's sequence, checked hour by hour against the recordings.
   So live fills are reproducible from the recordings, and the anti-cheat delay means what it
   says: an order meets the book of its effective time.
-- Every order takes effect at least H after its effective time in wall terms. This is latency in
-  the acknowledgement, not in the price the order gets.
+- Every order takes effect about H plus the fetch wait after its effective time in wall terms.
+  This is latency in the acknowledgement, not in the price the order gets.
 - **For order entry (the MCP server), a known gap.** What an order meets *at submission* (the
   gate, the funds reserved against a market order's band edge, whether a cancel finds the order
   still open) is checked against state as of the watermark, about H behind the wall clock, and
@@ -120,4 +136,25 @@ pairs, with limit orders submitted on the wall clock):
 - Delivery (consume time minus received time): 98% under 10 ms, all under 50 ms.
 - Hold-back 1 ms: 1 late record, detected and counted, as it should be.
 
-**Live on Gemini:** to be recorded from the validation run (#54).
+**Live on Gemini, first run** (2026-10-19, Windows laptop, about 2.5 hours with one restart):
+
+- `tools/merge_replay_check.py`: PASS. The 19:00 UTC hour was complete and matched on all three
+  pairs (26,007 / 26,702 / 16,530 records, live equal to recorded); 3 complete pair-hours, 6
+  partial ones skipped.
+- 162,841 level2 and 2,119 trade records released.
+- **87 out-of-order records** (about 0.05%). Cause: the ingestor publishes an audit (ADR 0012)
+  after holding it up to 2 s for the stream to reach its update ID, stamped with the depth
+  response's receive time, so it lands behind diffs received after it. Not a Kafka reorder: the
+  producer is idempotent with `acks=all`. Fixed in the ingestor (audits stamped when published).
+  Within each stream, recordings and the runner both keep Kafka order, so existing recordings
+  replay as live consumers saw them; only an audit's cross-stream position, which changes no
+  book, followed the earlier stamp.
+- **14 late records** (6 / 5 / 3 by pair), none in the matching hour. An out-of-order audit is late
+  whenever the watermark has passed its stamp by the time it is consumed. The runner now logs
+  each late record with its type and whether it came while catching up.
+- **Watermark lag 0.21 s on every pair**: H plus the 100 ms fetch wait the first version used
+  (now 20 ms), plus processing. Above the order delay, which is harmless: see the delay invariant.
+- Delivery over 5 s: 604 of 2,119 trades and 1,832 of 114,452 level2 observations. That was the
+  catch-up fetches, now left out (see H).
+
+A second run, after the ingestor fix and these changes, is to be recorded here.

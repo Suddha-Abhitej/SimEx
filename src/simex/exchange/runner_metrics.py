@@ -23,7 +23,8 @@ class RunnerMetrics:
         self.late = Counter(
             "simex_exchange_late_events",
             "Records that arrived after the watermark had passed their received time: applied "
-            "out of replay order. Should stay 0; a rise means the hold-back is too short",
+            "out of replay order, and each logged with its type. 0 when every partition is in "
+            "receive order and the hold-back covers delivery, after a restart too",
             ["product_id", "channel"],
             registry=r,
         )
@@ -35,15 +36,18 @@ class RunnerMetrics:
         )
         self.delivery_seconds = Histogram(
             "simex_exchange_delivery_seconds",
-            "Wall time when consumed minus received_at_ns, for records consumed while the "
-            "partition was caught up: the delay the hold-back has to cover",
+            "Wall time when consumed minus received_at_ns, in steady state only: records from a "
+            "partition caught up at this fetch and the one before. The catch-up after a start "
+            "is left out (its delay is the backlog's age), so the count is below events. This "
+            "is the delay the hold-back has to cover",
             ["channel"],
             buckets=DELIVERY_BUCKETS,
             registry=r,
         )
         self.watermark_lag = Gauge(
             "simex_exchange_watermark_lag_seconds",
-            "Wall time minus the pair's watermark: about the hold-back when caught up",
+            "Wall time minus the pair's watermark, set after each fetch: the hold-back plus the "
+            "fetch's wait when caught up",
             ["product_id"],
             registry=r,
         )
@@ -61,8 +65,8 @@ class RunnerMetrics:
         )
         self.out_of_order = Gauge(
             "simex_exchange_out_of_order_records",
-            "Records whose received time was below an earlier one's in the same partition "
-            "(the ingestor produces in receive order, so this should stay 0)",
+            "Records whose received time was below an earlier one's in the same partition, each "
+            "logged with its type and how far below. The merge assumes this is 0",
             registry=r,
         )
         self.state = Gauge(

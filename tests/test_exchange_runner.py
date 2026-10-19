@@ -316,7 +316,76 @@ def test_hours_are_complete_only_when_the_runner_saw_both_sides():
     ]
 
 
-def test_the_holdback_must_stay_below_the_order_delay():
+def test_the_holdback_setting():
     with pytest.raises(ValueError):
-        RunnerSettings(holdback_ms=200)
-    assert RunnerSettings.from_env({"EXCHANGE_MERGE_HOLDBACK_MS": "60"}).holdback_ms == 60
+        RunnerSettings(holdback_ms=-1)
+    assert RunnerSettings.from_env({"EXCHANGE_MERGE_HOLDBACK_MS": "250"}).holdback_ms == 250
+
+
+def runner_on(kafka, **settings):
+    return ExchangeRunner(
+        RunnerSettings(pairs=PAIRS, digest_path="", **settings), kafka, RunnerMetrics(),
+        wall_ns=lambda: kafka.wall, engine_settings=EngineSettings(),
+    )  # fmt: skip
+
+
+def histogram_count(runner):
+    samples = runner.metrics.delivery_seconds.collect()[0].samples
+    return sum(s.value for s in samples if s.name.endswith("_count"))
+
+
+def test_delivery_leaves_out_the_catch_up():
+    """An hour-old backlog read at start: its delay is the backlog's age, not delivery."""
+    records = market(4, 200)
+    kafka = FakeKafka(records, random.Random(4), 0)
+    kafka.wall = max(r[2] for r in records) + 3600 * 10**9
+    runner = runner_on(kafka)
+
+    async def go():
+        await runner.start()
+        for _ in range(50):
+            runner.handle(await kafka.fetch(0))
+
+    asyncio.run(go())
+    assert histogram_count(runner) == 0
+
+    class ReadsAll(random.Random):
+        def randint(self, a, b):
+            return b
+
+    # In steady state it counts: a new record, consumed with partitions already caught up
+    # (and read whole, as Kafka returns what is there).
+    kafka.rng = ReadsAll()
+    t = kafka.wall - 5 * MS
+    value = trade("BTC-USD", t, "99.99", "1", True)
+    log = kafka.logs[(TR, PARTITION[(TR, "BTC-USD")])]
+    log.append((t, Record(TR, PARTITION[(TR, "BTC-USD")], len(log), b"BTC-USD", value)))
+    kafka.visible[(TR, PARTITION[(TR, "BTC-USD")])].append(t)
+    for _ in range(20):
+        runner.handle(asyncio.run(kafka.fetch(0)))
+    assert histogram_count(runner) == 1
+
+
+def test_out_of_order_and_late_records_are_logged_with_their_type(caplog):
+    # Two level2 records in one partition, the second received 300 ms before the first: the
+    # ingestor's held audits looked like this.
+    first = level2("BTC-USD", T0 + 1002 * MS, [("99.99", "1")])
+    early = level2("BTC-USD", T0 + 700 * MS, [("99.98", "1")])
+    kafka = FakeKafka(market(5, 0), random.Random(5), 0)
+    runner = runner_on(kafka, holdback_ms=0)
+
+    async def go():
+        await runner.start()
+        kafka.wall = T0 + 1001 * MS
+        runner.handle(await kafka.fetch(0))  # the snapshots
+        records = [Record(L2, 0, 10, b"BTC-USD", first)]
+        runner.handle(Fetched(records, list(kafka.logs), kafka.wall))
+        records = [Record(L2, 0, 11, b"BTC-USD", early)]
+        runner.handle(Fetched(records, list(kafka.logs), kafka.wall + MS))
+
+    with caplog.at_level("WARNING", logger="simex.exchange.runner"):
+        asyncio.run(go())
+    assert runner.bounds.out_of_order == 1 and late_count(runner) == 1
+    text = "\n".join(caplog.messages)
+    assert "offset 11 (BTC-USD, data) was received 302 ms before" in text
+    assert "late: md.level2 p0 offset 11 (BTC-USD, data)" in text

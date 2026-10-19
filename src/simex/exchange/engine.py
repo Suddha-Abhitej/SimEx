@@ -171,8 +171,16 @@ class PairEngine:
         """Hand over an order the account writer accepted (PENDING). Rejected ones are ignored."""
         if order.product_id != self.product_id:
             raise ValueError(f"{order.product_id} order sent to the {self.product_id} engine")
-        if order.status is OrderStatus.PENDING and order.order_id not in self.pending:
-            self.pending.append(order.order_id)
+        if order.status is not OrderStatus.PENDING or order.order_id in self.pending:
+            return
+        if order.effective_at_ns <= self.now_ns:
+            # The engine is already past the moment the order was to take effect: applying it
+            # now would meet a later book. Live, this means the order reached the engine more
+            # than the delay plus the watermark lag after it was stamped (ADR 0015).
+            self.stats.add("rejected_on_effect:arrived_after_effective")
+            self.writer.reject_on_effect(order.order_id, "arrived_after_effective", self.now_ns)
+            return
+        self.pending.append(order.order_id)
 
     # Time ------------------------------------------------------------------------------------
 

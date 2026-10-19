@@ -59,13 +59,18 @@ class Bounds:
             self.partitions.setdefault(topic, set()).add(p)
             self.bound.setdefault((topic, p), NEVER)
 
-    def consumed(self, arrival: Arrival) -> None:
+    def consumed(self, arrival: Arrival) -> int:
+        """Record a consumed record. Returns how far its received time fell below the last one
+        consumed from its partition (0 when in order)."""
         tp = (arrival.topic, arrival.partition)
         last = self.last_received.get(tp)
+        backstep = 0
         if last is not None and arrival.received_at_ns < last:
             self.out_of_order += 1
+            backstep = last - arrival.received_at_ns
         self.last_received[tp] = max(last or NEVER, arrival.received_at_ns)
         self._raise(tp, arrival.received_at_ns)
+        return backstep
 
     def caught_up(self, topic: str, partition: int, observed_wall_ns: int) -> None:
         """The partition had nothing more to read as of observed_wall_ns (wall clock)."""
