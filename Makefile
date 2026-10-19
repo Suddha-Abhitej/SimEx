@@ -1,5 +1,5 @@
 # Local stack shortcuts. On Windows without make, use scripts/dev.ps1 (same targets).
-.PHONY: up down logs ps smoke ingest book record
+.PHONY: up down logs ps smoke ingest book record exchange
 
 COMPOSE ?= docker compose
 PYTHON ?= python
@@ -27,3 +27,6 @@ book:  ## Run the order book service: md.level2 to Valkey (metrics on :9102/metr
 
 record:  ## Run the recorder: md.* to data/recordings as hourly Parquet (metrics on :9103/metrics)
 	$(PYTHON) -m simex.recorder
+
+exchange:  ## Run the live exchange runner: md.level2 + md.trades to the fill engines (metrics on :9104/metrics)
+	$(PYTHON) -m simex.exchange

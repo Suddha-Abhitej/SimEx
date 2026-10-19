@@ -1,0 +1,28 @@
+# The live exchange runner's merge (ADR 0015). Late records reached an engine out of replay
+# order: the hold-back is too short for this machine, and live fills may differ from a replay.
+# A stalled watermark means the engines aren't advancing: the runner is stuck or far behind
+# Kafka. A dead feed is not this alert: caught-up partitions keep the watermark moving, and
+# the stale-data guard (#9) handles a feed that stops.
+groups:
+  - name: simex-exchange
+    rules:
+      - alert: ExchangeLateRecords
+        expr: sum(increase(simex_exchange_late_events_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | printf \"%.0f\" }} records reached the engine out of replay order in 10 minutes"
+          description: >-
+            Records arrived after the watermark had passed their received time. Check
+            simex_exchange_delivery_seconds against EXCHANGE_MERGE_HOLDBACK_MS and raise the
+            hold-back (it must stay below the order delay).
+      - alert: ExchangeWatermarkStalled
+        expr: max(simex_exchange_watermark_lag_seconds) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An engine's watermark is {{ $value | printf \"%.0f\" }} s behind the wall clock"
+          description: >-
+            The runner isn't releasing records: it is stuck or far behind md.level2 or
+            md.trades. Orders would wait; check the runner's log and Kafka.

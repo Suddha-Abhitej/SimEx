@@ -1,7 +1,7 @@
 # Local stack shortcuts for Windows (same targets as the Makefile).
-# Usage: .\scripts\dev.ps1 up | down | logs [service] | ps | smoke | ingest | book | record
+# Usage: .\scripts\dev.ps1 up | down | logs [service] | ps | smoke | ingest | book | record | exchange
 param(
-    [Parameter(Position = 0)][ValidateSet("up", "down", "logs", "ps", "smoke", "ingest", "book", "record")][string]$Command = "ps",
+    [Parameter(Position = 0)][ValidateSet("up", "down", "logs", "ps", "smoke", "ingest", "book", "record", "exchange")][string]$Command = "ps",
     [Parameter(Position = 1)][string]$Service
 )
 $ErrorActionPreference = "Stop"
@@ -16,5 +16,6 @@ switch ($Command) {
     "ingest" { python -m simex.ingest }
     "book"   { python -m simex.book }
     "record" { python -m simex.recorder }
+    "exchange" { python -m simex.exchange }
 }
 exit $LASTEXITCODE

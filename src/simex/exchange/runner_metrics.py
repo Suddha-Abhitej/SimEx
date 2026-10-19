@@ -1,0 +1,83 @@
+"""Prometheus metrics for the live runner, served on EXCHANGE_METRICS_PORT (9104) at /metrics."""
+
+from __future__ import annotations
+
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
+
+from simex.book.orderbook import BookState
+
+DELIVERY_BUCKETS = (0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0, 5.0)
+LATE_BUCKETS = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0, 5.0)
+
+
+class RunnerMetrics:
+    def __init__(self, registry: CollectorRegistry | None = None) -> None:
+        self.registry = registry or CollectorRegistry()
+        r = self.registry
+        self.events = Counter(
+            "simex_exchange_events",
+            "Records released to the pair's engine, by channel (level2, trades)",
+            ["product_id", "channel"],
+            registry=r,
+        )
+        self.late = Counter(
+            "simex_exchange_late_events",
+            "Records that arrived after the watermark had passed their received time: applied "
+            "out of replay order. Should stay 0; a rise means the hold-back is too short",
+            ["product_id", "channel"],
+            registry=r,
+        )
+        self.late_seconds = Histogram(
+            "simex_exchange_late_seconds",
+            "How far behind the watermark a late record's received time was",
+            buckets=LATE_BUCKETS,
+            registry=r,
+        )
+        self.delivery_seconds = Histogram(
+            "simex_exchange_delivery_seconds",
+            "Wall time when consumed minus received_at_ns, for records consumed while the "
+            "partition was caught up: the delay the hold-back has to cover",
+            ["channel"],
+            buckets=DELIVERY_BUCKETS,
+            registry=r,
+        )
+        self.watermark_lag = Gauge(
+            "simex_exchange_watermark_lag_seconds",
+            "Wall time minus the pair's watermark: about the hold-back when caught up",
+            ["product_id"],
+            registry=r,
+        )
+        self.held = Gauge(
+            "simex_exchange_held_records",
+            "Records consumed but not yet released (waiting for the watermark)",
+            ["product_id"],
+            registry=r,
+        )
+        self.caught_up = Gauge(
+            "simex_exchange_partition_caught_up",
+            "1 when the partition was read to its end at the last fetch",
+            ["topic", "partition"],
+            registry=r,
+        )
+        self.out_of_order = Gauge(
+            "simex_exchange_out_of_order_records",
+            "Records whose received time was below an earlier one's in the same partition "
+            "(the ingestor produces in receive order, so this should stay 0)",
+            registry=r,
+        )
+        self.state = Gauge(
+            "simex_exchange_book_state",
+            "1 for the engine book's current state (EMPTY, SYNCED, RESYNCING), 0 for the others",
+            ["product_id", "state"],
+            registry=r,
+        )
+        self.undecodable = Counter(
+            "simex_exchange_undecodable_records",
+            "Records the engine couldn't decode (released and digested, not applied)",
+            ["product_id"],
+            registry=r,
+        )
+
+    def set_state(self, product: str, state: BookState) -> None:
+        for s in BookState:
+            self.state.labels(product, s.value).set(1 if s is state else 0)
