@@ -207,6 +207,14 @@ def test_commit_never_passes_a_record_still_in_an_open_file(tmp_path):
 # Crashes -------------------------------------------------------------------------------------
 
 
+def _process_dies(recorder):
+    """A dead process holds no file handles. In-process, the "crashed" recorder still does,
+    and Windows refuses to delete an open file, so release them (the .tmp files stay)."""
+    for writer in recorder.writers.values():
+        if writer._writer is not None:
+            writer._writer.close()
+
+
 def _crash_once(monkeypatch, target, name):
     real = getattr(target, name)
     calls = {"n": 0}
@@ -259,6 +267,7 @@ def test_a_crash_at_every_step_loses_nothing_and_duplicates_nothing(tmp_path, mo
 
     asyncio.run(until_crash())
     # The process is gone: no close(), open .tmp files stay where they are.
+    _process_dies(first)
     if step in ("mid_file", "after_commit"):
         assert list((tmp_path / "rec").rglob("*.tmp"))
     if step == "after_commit":
@@ -415,13 +424,31 @@ def test_windows_skips_directory_fsync_and_uses_os_replace(tmp_path, monkeypatch
 
 def test_posix_fsyncs_the_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(files, "IS_WINDOWS", False)
-    synced = []
-    real_fsync = os.fsync
-    monkeypatch.setattr(files.os, "fsync", lambda fd: (synced.append(fd), real_fsync(fd)))
+    real_open, real_fsync, real_close = os.open, os.fsync, os.close
+    DIR_FD = -100  # Windows can't open a directory, so the directory's descriptor is a stand-in
+    opened, synced = [], []
+
+    def fake_open(path, flags, *args):
+        if Path(path).is_dir():
+            opened.append(Path(path))
+            return DIR_FD
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(files.os, "open", fake_open)
+
+    def fake_fsync(fd):
+        synced.append(fd)
+        if fd != DIR_FD:
+            real_fsync(fd)
+
+    monkeypatch.setattr(files.os, "fsync", fake_fsync)
+    monkeypatch.setattr(files.os, "close", lambda fd: None if fd == DIR_FD else real_close(fd))
     tmp = tmp_path / "x.parquet.tmp"
     tmp.write_bytes(b"data")
     files.publish(tmp, tmp_path / "x.parquet")
-    assert (tmp_path / "x.parquet").read_bytes() == b"data" and len(synced) == 2  # file + dir
+    assert (tmp_path / "x.parquet").read_bytes() == b"data"
+    # The file, then the directory after the rename.
+    assert opened == [tmp_path] and len(synced) == 2 and synced[1] == DIR_FD
 
 
 # Retention -----------------------------------------------------------------------------------

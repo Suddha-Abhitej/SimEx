@@ -108,7 +108,9 @@ class Ingestor:
         adapter: VenueAdapter | None = None,
         connect: Callable[..., Any] = websockets.connect,
         clock_ns: Callable[[], int] = time.time_ns,
-        monotonic: Callable[[], float] = time.monotonic,
+        # perf_counter, not time.monotonic: on Windows monotonic ticks every ~15.6 ms, which
+        # reads a sub-tick ping round trip as 0.
+        monotonic: Callable[[], float] = time.perf_counter,
         sleep: Callable[[float], Any] = asyncio.sleep,
         backoff: Backoff | None = None,
     ) -> None:
