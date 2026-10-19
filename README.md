@@ -286,9 +286,9 @@ duckdb.sql("""
 
 ### Exchange core: orders and balances
 
-`simex.exchange` holds the order model and the per-account balances
-([ADR 0014](docs/adr/0014-order-model-and-fill-model.md)); the fill simulator against the live
-book comes next (#8). Simulated money only (ADR 0002).
+`simex.exchange` holds the order model, the per-account balances and the fill simulator
+against the live book ([ADR 0014](docs/adr/0014-order-model-and-fill-model.md)). Simulated money
+only (ADR 0002).
 
 - **Orders:** limit (good till cancelled) and market (IOC inside a per-pair band, 50 bps by
   default, `EXCHANGE_MARKET_BAND_BPS`), and cancel. Quantities and prices are decimal strings on
@@ -303,6 +303,22 @@ book comes next (#8). Simulated money only (ADR 0002).
   (`EXCHANGE_MAKER_FEE_BPS`, `EXCHANGE_TAKER_FEE_BPS`). **A round trip costs 1.8 to 2.4%**, so
   fees dominate most strategies; results should always show gross P&L, fee drag and net P&L
   separately.
+- **Fills** (`PairEngine`, one per pair): market orders and the crossing part of limits walk the
+  book inside the band, with a depletion map so two orders can't take the same liquidity. Resting
+  limits queue at the back of their level and fill only from the venue's own activity: a print at
+  their price once the queue ahead has cleared, a print beyond it, or the venue's book crossing
+  their price. A level shrink that no print explains within W is a cancel, which moves the queue
+  forward (proportionally by default; `EXCHANGE_CANCEL_ATTRIBUTION=pessimistic|optimistic`
+  brackets it) but never fills anything. Fills pause while the book isn't SYNCED.
+- **W** is measured from the recordings, not guessed:
+
+  ```bash
+  python tools/measure_fill_window.py --start 2026-10-16T00:00 --hours 24
+  ```
+
+  It prints, per pair, the time between each shrink and its print and, for candidate windows, the
+  share of prints matched and of shrinks left unmatched, and picks W. Counts and milliseconds
+  only.
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

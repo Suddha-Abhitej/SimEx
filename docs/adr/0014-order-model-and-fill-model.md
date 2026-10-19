@@ -41,7 +41,9 @@ look equally bad, and the benchmark would teach nothing.
 - **Decimal, strings and grids (ADR 0004).** Quantities and prices arrive as strings (a JSON
   number has been through a float) and must sit exactly on the pair's price tick and size
   increment, at or above its minimum size. Off-grid orders are rejected, never rounded.
-  `tools/gemini_symbols.py` checks the table against Gemini's `/v1/symbols/details`.
+  `tools/gemini_symbols.py` checks the table against Gemini's `/v1/symbols/details`; the
+  values were **confirmed live on 2026-10-18** for all three pairs. Note Gemini's naming: the
+  price tick is `quote_increment`, while `tick_size` is the size increment.
 - **Time is the market-data clock** (`received_at_ns`), not the wall clock: an order takes effect
   at arrival plus the delay, so a replay reproduces every fill.
 
@@ -101,9 +103,12 @@ queue the cancelled order sat is unknowable.** It is treated proportionally,
 likely anywhere. Two bracket settings bound it: pessimistic (every cancel behind us; fills only
 from prints) and optimistic (every cancel ahead). Growth at the price is orders joining behind us.
 
-**W is measured, not guessed** (#8): for each shrink, the time to the print at that price that
-matches it, per pair, from the recordings; W is set from that distribution, with the fraction of
-shrinks left unmatched at the chosen W reported.
+**W is measured, not guessed** (#8), by `tools/measure_fill_window.py` on the recordings. For
+each pair it reports the time from each shrink to the print that explains it (an offline pass
+pairing each print with the nearest shrinks at its price, before or after it), and, running the
+engine's own matcher at candidate windows, how much print quantity is matched and how much shrink
+quantity is left unmatched. W is the smallest candidate that matches at least 99% of what a 5 s
+window matches; the result and the unmatched share at that W are in Measured below.
 
 **How pessimistic: no maker fill without a print.** A cancel only moves an order forward; only
 (a), (b) and (c) fill it. A cancel can bring an order to the front, but nothing fills until
@@ -164,9 +169,10 @@ orders and cancels). #9 and #10 implement these; the order model only calls them
 
 This ADR changes two points of ADR 0005, explicitly (CLAUDE.md):
 
-- **"Optionally, orders fill only against trades that happen after arrival" (point 5)** becomes
-  an off-by-default stress mode. With 4 to 11 prints a minute it would leave market orders
-  waiting minutes for a print.
+- **"Optionally, orders fill only against trades that happen after arrival" (point 5)** is no
+  longer a mode of the main fill path: with 4 to 11 prints a minute it would leave market orders
+  waiting minutes for a print. It may come back as an off-by-default stress mode; #8 doesn't
+  build it.
 - **The 2 s lag threshold (point 3)** is relaxed to the 5 s level2-age rule (ADR 0011): lag
   compares the exchange's clock with ours, and the laptop's clock was 540 ms off, so a 2 s lag
   check isn't trustworthy without a synced clock. The guard always applies the 5 s age, measured
@@ -174,6 +180,25 @@ This ADR changes two points of ADR 0005, explicitly (CLAUDE.md):
 
 The rest of ADR 0005 stands: fills at arrival plus a delay at least as long as feed lag, the
 stale-data guard, exchange timestamps for candles.
+
+### Implementation (#8)
+
+`simex.exchange.PairEngine`, one per pair, owns its `OrderBook`, the depletion map, the resting
+orders' queue state and a `ShrinkMatcher` (`simex.exchange.attribution`, the same class the W
+measurement runs). It takes accepted orders from the account writer and reports fills and state
+changes back to it. `on_event` first does what is due by the event's `received_at_ns` (orders
+and cancels taking effect, depletion and matcher expiry) against the book as it stood, then
+applies the event; `advance` does the same for quiet periods. Orders taking effect at the same
+moment go in arrival order. Settings: `EXCHANGE_MATCH_WINDOW_MS` (W),
+`EXCHANGE_DEPLETION_MAX_AGE_SECONDS` (10), `EXCHANGE_CANCEL_ATTRIBUTION`
+(`proportional`, `pessimistic`, `optimistic`).
+
+Counters (`PairEngine.stats`, counts and quantities), for the honesty report:
+`maker_fills:print`, `maker_fills:trade_through`, `maker_fills:book_cross`, `taker_fills`,
+`market_orders` and `band_binds` (the band's binding rate), `depletion_expired:venue_update`,
+`depletion_expired:snapshot`, `depletion_expired:age`, `prints_ignored_unsynced` (the cost of
+pausing while not SYNCED), `prints_no_aggressor`, `cancels:<mode>`, and
+`rejected_on_effect:<reason>`.
 
 ## Consequences
 
@@ -188,3 +213,8 @@ stale-data guard, exchange timestamps for candles.
   how far an order can walk.
 - W, the band's binding rate, depletion expiries, ignored prints and the cause mix are measured,
   not assumed, and land in this ADR's Measured section with #8.
+
+## Measured
+
+**W:** to be measured on the recordings with `tools/measure_fill_window.py` (the engine default,
+500 ms, is a placeholder until then).
