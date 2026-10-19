@@ -188,6 +188,27 @@ venue is the cross bracket** (`print` against `fill`: 52 to 73% against 92 to 95
 cancel bracket is second order. The report shows all four runs, and a result that only holds
 under one of them is reported as such.
 
+**E. Known bias: the default is pessimistic on maker fills by 1 to 5 bp.** Under the default the
+simulated makers' markouts are worse than real makers' at the same prices: -1.3 bp on BTC, -4.1 on
+ETH, -4.7 on SOL (Measured). The mechanism is the fill mix. Trade-throughs are 95 to 98% of the
+model's maker fills (BTC 2,146 of 2,256, ETH 1,685 of 1,714, SOL 1,466 of 1,521), so it fills a
+maker almost only at the adverse moment, after the price has moved through the order. It
+under-represents the benign fills at the order's own price, where the price doesn't move
+afterwards; a real maker gets a mix of both. Against the 60 bps maker fee the bias is small but
+not negligible: about 2% of it on BTC, 7% on ETH, 8% on SOL. Pessimistic is the intended side to
+err on: a model that understates maker results can't make a strategy look better than it is.
+**Closing this gap is the first thing to revisit if maker strategies become central** to what
+SimEx evaluates.
+
+**F. Limitation: the check validates the price of maker fills, not their frequency.** B's hard
+test compares markouts with real prints at the same prices, so it verifies the price quality of
+the fills the model gives. Nothing here verifies how often it gives them: checking the 73 / 57 /
+52% fill rates at 300 s (BTC / ETH / SOL) would need a real account's own fill history, which
+SimEx doesn't have and won't under ADR 0010. **Fill frequency is the largest unverified assumption
+in the fill model.** The width of the print-against-fill bracket on the 300 s rate, 19 / 38 / 42
+points, is the measure of how far it could be off, and results that depend on fill frequency are
+reported with both ends of it.
+
 `tools/fill_replay_check.py` is the first version of B on recordings: minimum-size passive probes
 at the best bid and ask every minute, each living 300 s, under the three cancel modes with
 `print` and under proportional with `fill`. It reports the fill rates at 10, 60 and 300 s and the
