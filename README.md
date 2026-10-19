@@ -336,6 +336,10 @@ only (ADR 0002).
   real prints' at the same price. It reports passive fill rates at 10, 60 and 300 s, fills by
   cause, the band's binding rate, depletion expiries, ignored prints and the share of prints no
   shrink explains.
+  Over 28 live hours: passive orders at the touch fill 5 to 15% within 10 s and 52 to 73% within
+  5 minutes, almost all after the price has traded through them, with markouts 1 to 5 bp worse
+  than real makers'. Maker orders save the taker fee but don't earn the spread (ADR 0014,
+  Measured).
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

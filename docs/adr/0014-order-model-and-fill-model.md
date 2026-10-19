@@ -175,14 +175,18 @@ tune away. The report shows the share of print quantity with no matching shrink 
 `print_unmatched` quantity over all print quantity) next to the taker and maker numbers, per pair
 and per window, so a change in it is visible.
 
-**D. The cancel bracket carries the queue.** About 99.9% of shrink quantity is cancels at every
-W (Measured), so the proportional-cancel rule, not prints, is what moves a resting order to the
-front. The pessimistic and optimistic runs are therefore the main uncertainty in every maker
-number, not a side check: the report shows maker fill rate, time to fill and markouts under all
-three modes, and a result that only holds under one of them is reported as such. With crosses no
-longer filling, queue position decides whether a print reaches an order, so the three modes must
-give visibly different results; identical results mean something else is short-circuiting the
-queue.
+**D. Two brackets, and which one carries the result.** About 99.9% of shrink quantity is cancels
+at every W (Measured), so the proportional-cancel rule is what moves a resting order toward the
+front, and the pessimistic and optimistic runs bracket it. With crosses no longer filling, queue
+position decides whether a print *at the order's price* reaches it, so the three modes must give
+visibly different results there; identical results would mean something is short-circuiting the
+queue. Measured, they do differ: print fills differ two- to fivefold between modes (BTC: 36 / 110 /
+180). But the fill rates move by under 1.5 points, because most probes are crossed and then fill by
+trade-through, and a trade-through fills an order wherever it sits in the queue. That is the cross
+rule working as designed, not a short-circuit. **The bracket that carries maker results on this
+venue is the cross bracket** (`print` against `fill`: 52 to 73% against 92 to 95% at 300 s); the
+cancel bracket is second order. The report shows all four runs, and a result that only holds
+under one of them is reported as such.
 
 `tools/fill_replay_check.py` is the first version of B on recordings: minimum-size passive probes
 at the best bid and ask every minute, each living 300 s, under the three cancel modes with
@@ -218,11 +222,13 @@ stale-data guard, exchange timestamps for candles.
 
 ### Book cross: amended after the live check
 
-**What the check found** (`tools/fill_replay_check.py`, 2026-10-16 12:00 to 13:00 UTC, with the
-original rule): book-cross fills were 97 to 100% of maker fills on all three pairs, and passive
-probes at the best bid and ask filled 87 to 92% of the time within a minute. The bracket brackets
-nothing: all three cancel modes gave identical results, because the cross filled the orders before
-queue position mattered.
+**What the check found** (`tools/fill_replay_check.py` with the original rule). Over 2026-10-16
+12:00 to 13:00 UTC, book-cross fills were 97 to 100% of maker fills on all three pairs, and
+passive probes at the best bid and ask filled 87 to 92% of the time within a minute; all three
+cancel modes gave identical results. Over the 28 hours of Measured, the same: book-cross fills
+were 91 to 99% of maker fills and probes filled 83 to 89%. The cancel modes differed only in the
+few print fills (BTC: 4 / 63 / 140, pessimistic / proportional / optimistic), so the queue model
+worked; the cross filled the orders before queue position mattered.
 
 **Why (c) was kept, and what overturned it.** The owner argued for (c) on the ground that a real
 venue matches on arrival before any cancel, so liquidity that reaches our price would have traded
@@ -244,14 +250,25 @@ cancel bracket. A variant that fills only when the price goes strictly through o
 it leaves the one-tick-or-more requote case, and a third cross mode would make the bracket report
 combinatorial.
 
-**What to expect, and what it means.** Passive fill rates fall from the 87 to 92% above. The
-result under the default, at 10, 60 and 300 s, is in Measured below, and it is a finding about the
-venue, not a defect of the simulator: Gemini prints only 4 to 11 times a minute per pair and its
-book moves by requoting, so a passive order at the touch rarely fills. If passive orders rarely
-fill, agents are pushed into taker orders at 120 bps; together with the fee finding (a round trip
-costs 1.8 to 2.4%), that bounds what SimEx can measure on this venue. **Strategies that need
-frequent passive fills cannot be evaluated honestly here, and a result that depends on them is
-reported as such.**
+**What was expected, and what was found.** The expectation was that passive fill rates would
+collapse, since Gemini prints only 4 to 11 times a minute per pair, and that agents would be
+pushed into taker orders at 120 bps. The re-run (Measured, "Passive fill rates") showed something
+different, and it is a finding about the venue, not a defect of the simulator:
+
+- **Passive orders at the touch do fill, but late and adversely.** 5 to 15% fill within 10 s and
+  52 to 73% within 300 s, against 57 to 69% and 92 to 95% under `fill`. Almost all of those fills
+  are trade-throughs: the price moves through the order (it is crossed in 85 to 90% of cases),
+  and a later print beyond its price fills it. Very few fills come from a print at its own price.
+- **Those fills are adversely selected.** The default's maker markouts are 1 to 5 bp *worse* than
+  real makers' at the same prices, at 1, 10 and 60 s (the hard test passes: the model is not
+  better than real). A passive order on Gemini fills mostly when the market has moved against
+  it.
+- **So maker orders don't escape the cost bound; they move it.** An agent can avoid the 120 bps
+  taker fee only by resting at 60 bps and accepting fills that come late and after the price has
+  moved through it. Together with the fee finding (a round trip costs 1.8 to 2.4%), that bounds
+  what SimEx can measure on this venue. **A strategy whose edge depends on earning the spread
+  passively, or on fast passive fills, cannot be evaluated honestly here, and a result that
+  depends on it is reported as such.**
 
 ### Implementation (#8)
 
@@ -278,8 +295,8 @@ Counters (`PairEngine.stats`, counts and quantities), for the honesty report:
 
 - Taker fills are as honest as the audited book; maker fills are honest within a stated bracket,
   and under the default every maker fill traces to a print.
-- Passive orders rarely fill on Gemini; with the fees, that bounds what SimEx can measure here
-  (see "Book cross: amended").
+- Passive orders on Gemini fill late and adversely (mostly after the price trades through them);
+  with the fees, that bounds what SimEx can measure here (see "Book cross: amended").
 - Agents pay Gemini's real entry-tier fees, which will dominate most strategies; scores must
   separate gross, fees and net.
 - The account writer is a second kind of writer next to the pair engines, kept on purpose and
@@ -352,6 +369,33 @@ pessimistic/optimistic bracket in the honesty report matters more than first ass
 matching shrink even within 5 s: the hidden or replenished liquidity this ADR anticipated, and a
 hard ceiling on what any book-based simulator can explain on this venue (C above).
 
-**Passive fill rates, under the default** (`EXCHANGE_BOOK_CROSS=print`): to be recorded from the
-re-run of `tools/fill_replay_check.py` over the same 28 hours, at 10, 60 and 300 s per pair and
-cancel mode, with the markout comparison.
+**Passive fill rates and markouts** (`tools/fill_replay_check.py --start 2026-10-15T16:00 --hours
+28`, the same 28 hours; minimum-size passive probes at the best bid and ask every minute, each
+living 300 s; 2,933 to 3,065 per pair, less the 179 / 271 / 307 that crossed as taker on arrival).
+Result: PASS.
+
+Share of rested probes filled as maker within 10 / 60 / 300 s:
+
+| | proportional/print (default) | pessimistic/print | optimistic/print | proportional/fill |
+|---|---|---|---|---|
+| BTC-USD | 15.2 / 44.6 / 73.1% | 14.9 / 43.8 / 72.8% | 16.7 / 45.9 / 73.7% | 56.7 / 82.2 / 92.2% |
+| ETH-USD | 5.6 / 24.9 / 56.6% | 5.5 / 24.7 / 56.5% | 5.7 / 24.9 / 56.6% | 69.3 / 87.9 / 94.7% |
+| SOL-USD | 4.9 / 22.5 / 51.8% | 4.6 / 22.1 / 51.4% | 4.9 / 22.5 / 51.8% | 64.9 / 85.6 / 94.0% |
+
+Maker fills by cause under the default (print / trade-through / book-cross): BTC 110 / 2,146 / 0,
+ETH 29 / 1,685 / 0, SOL 55 / 1,466 / 0; crosses marked 2,640 / 2,772 / 2,686. Print fills by cancel
+mode (pessimistic / proportional / optimistic): BTC 36 / 110 / 180, ETH 16 / 29 / 35, SOL 31 / 55 /
+57. Under `fill`, book-cross fills are 93 to 99% of maker fills.
+
+Maker markouts under the default, minus real makers' at the same side and price (matched fills;
+the rest had no real print at their price):
+
+| | 1 s | 10 s | 60 s | matched / unmatched |
+|---|---:|---:|---:|---:|
+| BTC-USD | -1.32 bp | -1.34 bp | -0.98 bp | 722 / 1,533 |
+| ETH-USD | -4.12 bp | -4.26 bp | -4.12 bp | 552 / 1,162 |
+| SOL-USD | -4.71 bp | -4.62 bp | -4.97 bp | 723 / 798 |
+
+Negative is worse than real: the simulated maker fills are adversely selected, never better than
+the venue's. Prints during resyncs: 1 / 0 / 0; before the first snapshot: 0. Print quantity no
+shrink explains at W = 300 ms: 22.2% / 18.7% / 10.1%. Band binds: 0.
