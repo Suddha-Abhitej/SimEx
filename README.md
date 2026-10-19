@@ -286,9 +286,9 @@ duckdb.sql("""
 
 ### Exchange core: orders and balances
 
-`simex.exchange` holds the order model and the per-account balances
-([ADR 0014](docs/adr/0014-order-model-and-fill-model.md)); the fill simulator against the live
-book comes next (#8). Simulated money only (ADR 0002).
+`simex.exchange` holds the order model, the per-account balances and the fill simulator
+against the live book ([ADR 0014](docs/adr/0014-order-model-and-fill-model.md)). Simulated money
+only (ADR 0002).
 
 - **Orders:** limit (good till cancelled) and market (IOC inside a per-pair band, 50 bps by
   default, `EXCHANGE_MARKET_BAND_BPS`), and cancel. Quantities and prices are decimal strings on
@@ -303,6 +303,43 @@ book comes next (#8). Simulated money only (ADR 0002).
   (`EXCHANGE_MAKER_FEE_BPS`, `EXCHANGE_TAKER_FEE_BPS`). **A round trip costs 1.8 to 2.4%**, so
   fees dominate most strategies; results should always show gross P&L, fee drag and net P&L
   separately.
+- **Fills** (`PairEngine`, one per pair): market orders and the crossing part of limits walk the
+  book inside the band, with a depletion map so two orders can't take the same liquidity. Resting
+  limits queue at the back of their level and fill only from prints: one at their price once the
+  queue ahead has cleared, or one beyond it. The venue's book reaching their price fills nothing;
+  it puts them first in the queue (`EXCHANGE_BOOK_CROSS=fill` is the optimistic bracket). A level shrink that no print explains within W is a cancel, which moves the queue
+  forward (proportionally by default; `EXCHANGE_CANCEL_ATTRIBUTION=pessimistic|optimistic`
+  brackets it) but never fills anything. Fills pause while the book isn't SYNCED.
+- **W** is measured from the recordings, not guessed:
+
+  ```bash
+  python tools/measure_fill_window.py --start 2026-10-16T00:00 --hours 24
+  ```
+
+  It prints, per pair, the time between each shrink and its print and, for candidate windows, the
+  share of prints matched and of shrinks left unmatched, and picks W: the smallest window within 5
+  points of the 5 s coverage and at least the p90 of |print - shrink|. Counts and milliseconds
+  only. Over 28 live hours that gave **W = 300 ms** for all three pairs (`EXCHANGE_MATCH_WINDOW_MS`;
+  `EXCHANGE_MATCH_WINDOW_MS_<PAIR>` for one pair). It also found that about 99.9% of shrink
+  quantity is cancels, and that 5 to 17% of print quantity matches no visible shrink at all
+  (ADR 0014, Measured).
+- **Checking the simulator on recordings:**
+
+  ```bash
+  python tools/fill_replay_check.py --start 2026-10-16T12:00 --hours 1
+  ```
+
+  It replays a window through the engine under the three cancel modes (and under
+  `EXCHANGE_BOOK_CROSS=fill`), with minimum-size probe orders every minute: passive at the best
+  bid and ask, living 300 s, and a market buy and sell. It fails if money isn't conserved, a
+  balance goes negative, or the default's maker fills show markouts more than 1 bp better than
+  real prints' at the same price. It reports passive fill rates at 10, 60 and 300 s, fills by
+  cause, the band's binding rate, depletion expiries, ignored prints and the share of prints no
+  shrink explains.
+  Over 28 live hours: passive orders at the touch fill 5 to 15% within 10 s and 52 to 73% within
+  5 minutes, almost all after the price has traded through them, with markouts 1 to 5 bp worse
+  than real makers'. Maker orders save the taker fee but don't earn the spread (ADR 0014,
+  Measured).
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 
