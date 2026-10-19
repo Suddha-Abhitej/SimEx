@@ -157,8 +157,13 @@ def test_fault_injector_forces_a_gap_that_resyncs(caplog):
         await wait_until(lambda: records(producer, "research.coinbase.md.gaps"))
         await wait_until(lambda: ingestor.resync is None and not ingestor.awaiting)
 
+    # Every 12th message: the scenario sends at most 20 (6 on connect, 9 trades, 5 for the
+    # resubscribe), so the only drop is a trade, however the resubscribe interleaves with them.
+    # With 10, the second drop landed on a resubscribe snapshot or a trade depending on timing.
     with caplog.at_level(logging.WARNING, logger="simex.ingest"):
-        _, producer, metrics = asyncio.run(run_against(fake, script, drop_every=10))
+        ingestor, producer, metrics = asyncio.run(run_against(fake, script, drop_every=12))
+
+    assert ingestor.injector.dropped == 1
 
     assert any("FAULT INJECTOR ON" in m for m in caplog.messages)
     assert sample(metrics, "simex_ingest_fault_injected_drops_total") >= 1
