@@ -370,6 +370,14 @@ def test_an_audit_answered_ahead_of_the_stream_is_held_for_its_diff():
     assert all(r["aligned"] for r in audit_records(producer))
     _, audits = replay_level2(producer)
     assert audits and all(o.name == "AUDIT_MATCH" for _, o in audits)
+    # Held for its diff, the audit is stamped when it was published: each product's stream on
+    # md.level2 stays in receive order, and the response's own time is kept.
+    for product in {r["product_id"] for r in records(producer, "md.level2")}:
+        stream = [r for r in records(producer, "md.level2") if r["product_id"] == product]
+        times = [r["received_at_ns"] for r in stream]
+        assert times == sorted(times)
+    for r in audit_records(producer):
+        assert r["response_received_at_ns"] <= r["received_at_ns"]
 
 
 def test_an_audit_behind_the_stream_is_published_unaligned():
