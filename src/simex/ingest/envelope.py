@@ -184,10 +184,15 @@ def build_audit_envelope(
     received_at_ns: int,
     venue: str,
     topics: Topics,
+    response_received_at_ns: int | None = None,
 ) -> Envelope:
     """A book audit on the level2 topic (ADR 0012): the venue's top levels at update_id, with
     the venue's response spliced in byte for byte. Only an aligned audit sits right after the
-    message whose last update ID is update_id; books count unaligned ones as unaligned."""
+    message whose last update ID is update_id; books count unaligned ones as unaligned.
+
+    received_at_ns is when the ingestor published it, so it never falls below the records before
+    it in the partition (an audit can be held up to INGEST_AUDIT_HOLD_SECONDS for its diff);
+    response_received_at_ns is when the venue's response arrived."""
     fields = _header(
         type="audit",
         venue=venue,
@@ -199,6 +204,7 @@ def build_audit_envelope(
         update_id=update_id,
         aligned=aligned,
         reason=reason,
+        response_received_at_ns=response_received_at_ns,
     )
     raw_bytes = raw if isinstance(raw, bytes) else raw.encode("utf-8")
     return Envelope(

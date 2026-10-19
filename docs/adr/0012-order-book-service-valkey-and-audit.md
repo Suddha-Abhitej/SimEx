@@ -1,6 +1,7 @@
 # 0012. Order book library and service, Valkey book records, and the book audit
 
-- **Status:** Accepted
+- **Status:** Accepted, amended 2026-10-19 (an audit's `received_at_ns` is its publish time; see
+  the exactness rule)
 - **Date:** 2026-10-15
 
 ## Context
@@ -130,6 +131,16 @@ about a third of the time L falls inside the next batch, and no point in the str
     is the previous message's `u`, which on Gemini is also this diff's `U`, or a snapshot's ID).
     The remaining reasons (`timeout`, `resync`, `superseded`) are any other cause.
   - Nothing is ever dropped: every response is published once, so the counts add up.
+  - **Stamp (amended 2026-10-19).** An audit's `received_at_ns` is when the ingestor *published*
+    it, and the depth response's arrival is in `response_received_at_ns`. Until then the audit
+    carried the response's time, so a held audit (up to 2 s) went out behind diffs received
+    after it, and its partition was not in receive order. The live exchange runner's first
+    live run found it: 87 of about 163,000 records out of order, the late records with them
+    (ADR 0015). Recordings made before the change keep the old stamp on audit rows. Replay is
+    unaffected within each stream, which follows Kafka order, so books, audits and fills
+    replay exactly as before; only an audit's position against other streams followed the
+    earlier time, and an audit changes no book. `tools/partition_order_check.py` reports any
+    record out of receive order in a partition.
   - **Not built: retry on `inside_diff`.** Asking again right away would turn about 87% of turns
     into an exact compare (at about 64% aligned per try) for about one extra request per product
     every few minutes. The gate below is met without it, so it is left as a possible later

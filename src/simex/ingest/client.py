@@ -688,7 +688,11 @@ class Ingestor:
                     update_id=audit.update_id,
                     aligned=release.aligned,
                     reason=release.reason,
-                    received_at_ns=audit.received_at_ns,
+                    # Stamped when published, not when the response came: a held audit goes
+                    # out after diffs received later, and a partition must stay in receive
+                    # order for its readers (ADR 0012, 0015).
+                    received_at_ns=self._clock_ns(),
+                    response_received_at_ns=audit.received_at_ns,
                     venue=self.venue,
                     topics=self.topics,
                 )
