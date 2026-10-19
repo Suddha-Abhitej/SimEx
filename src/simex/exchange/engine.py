@@ -57,12 +57,17 @@ class CancelAttribution(StrEnum):
 @dataclass(frozen=True)
 class EngineSettings:
     # W: how long a shrink waits for the print that explains it. Measured from the recordings
-    # by tools/measure_fill_window.py; see ADR 0014's Measured section.
-    match_window_ns: int = 500_000_000
+    # by tools/measure_fill_window.py (300 ms for all three pairs); see ADR 0014's Measured
+    # section. match_window_ns_by_pair overrides it for one pair.
+    match_window_ns: int = 300_000_000
+    match_window_ns_by_pair: Mapping[str, int] = field(default_factory=dict)
     # A depletion entry ("we took X at p") ends at the venue's next update of that level, at the
     # next snapshot, or after this long, whichever is first.
     depletion_max_age_ns: int = 10 * SECOND
     cancel_attribution: CancelAttribution = CancelAttribution.PROPORTIONAL
+
+    def window_ns(self, product_id: str) -> int:
+        return self.match_window_ns_by_pair.get(product_id, self.match_window_ns)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> EngineSettings:
@@ -73,10 +78,18 @@ class EngineSettings:
             value = env.get(name, "").strip()
             return value if value else str(default)
 
+        def ms(value: str) -> int:
+            return int(float(value) * 1e6)
+
+        prefix = "EXCHANGE_MATCH_WINDOW_MS_"  # EXCHANGE_MATCH_WINDOW_MS_SOL_USD: one pair
+        by_pair = {
+            name.removeprefix(prefix).replace("_", "-"): ms(value)
+            for name, value in env.items()
+            if name.startswith(prefix) and value.strip()
+        }
         return cls(
-            match_window_ns=int(
-                float(get("EXCHANGE_MATCH_WINDOW_MS", d.match_window_ns / 1e6)) * 1e6
-            ),
+            match_window_ns=ms(get("EXCHANGE_MATCH_WINDOW_MS", d.match_window_ns / 1e6)),
+            match_window_ns_by_pair=by_pair,
             depletion_max_age_ns=int(
                 float(get("EXCHANGE_DEPLETION_MAX_AGE_SECONDS", d.depletion_max_age_ns / 1e9)) * 1e9
             ),
@@ -133,7 +146,7 @@ class PairEngine:
         self.depletion: dict[tuple[str, Decimal], Depletion] = {}
         self.resting: dict[str, Resting] = {}
         self.pending: list[str] = []  # accepted orders waiting for their effective time
-        self.matcher = ShrinkMatcher(self.settings.match_window_ns)
+        self.matcher = ShrinkMatcher(self.settings.window_ns(product_id))
         self.dedupe = TradeDeduper()
         self.stats = EngineStats()
         self.now_ns = 0

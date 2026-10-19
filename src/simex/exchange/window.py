@@ -10,11 +10,16 @@ For every level2 shrink on a SYNCED book and every print (deduplicated, with an 
   and reports how much print quantity found its shrink and how much shrink quantity was left
   unmatched (what the engine treats as cancels).
 
-W is the smallest candidate that matches at least 99% of the print quantity the wide window
-matches: past that, a longer W only misreads cancels as fills. If even the wide window explains
-under 80% of print quantity, prints and shrinks don't line up (wrong data, a bug, or liquidity the
-book never shows), and no W is chosen: the report says so instead. Counts and milliseconds only; no
-prices (ADR 0010).
+W is the smallest candidate that both
+- matches print quantity within 5 percentage points of what the wide (5 s) window matches, and
+- is at least the p90 of |print - shrink|, so it covers nine in ten real pairings.
+On live data coverage keeps creeping up with the window, because a wider window also pairs prints
+with unrelated cancels; a rule relative to the wide window's own coverage ("99% of it") then runs
+to the end of the list. The 5-point margin stops there, and the p90 floor stops a window that only
+looks good because little is left to gain. If no candidate passes, no W is chosen, never the wide
+probe itself. If even the wide window explains under 80% of print quantity, prints and shrinks
+don't line up (wrong data, a bug, or liquidity the book never shows), and no W is chosen either:
+the report says so. Counts and milliseconds only; no prices (ADR 0010).
 """
 
 from __future__ import annotations
@@ -32,7 +37,8 @@ from .attribution import ShrinkMatcher, book_side_hit
 MS = 1_000_000
 WIDE_MS = 5000
 CANDIDATES_MS = (25, 50, 100, 150, 200, 300, 500, 750, 1000, 2000)
-TARGET = Decimal("0.99")
+MARGIN = Decimal("0.05")  # within 5 percentage points of the wide window
+FLOOR_PERCENTILE = 0.9  # and at least p90 of |print - shrink|
 MIN_EXPLAINED = Decimal("0.80")
 
 
@@ -61,10 +67,11 @@ class PairWindow:
         ceiling = self.matched_print_share(WIDE_MS)
         if ceiling < MIN_EXPLAINED:
             return None
+        floor = self.percentile_ms(FLOOR_PERCENTILE, absolute=True) or 0
         for window in CANDIDATES_MS:
-            if self.matched_print_share(window) >= ceiling * TARGET:
+            if window >= floor and self.matched_print_share(window) >= ceiling - MARGIN:
                 return window
-        return WIDE_MS
+        return None
 
     def percentile_ms(self, q: float, absolute: bool = False) -> float | None:
         """Quantity-weighted percentile of print time minus shrink time, in ms."""
@@ -199,11 +206,17 @@ def format_report(pairs: dict[str, PairWindow]) -> str:
         chosen.append(w)
         if w is not None:
             lines.append(f"  -> W for {product}: {w} ms")
-        else:
+        elif result.matched_print_share(WIDE_MS) < MIN_EXPLAINED:
             lines.append(
                 f"  -> no W for {product}: within {WIDE_MS} ms only "
                 f"{result.matched_print_share(WIDE_MS):.1%} of print quantity matches a shrink "
                 f"(needs {MIN_EXPLAINED:.0%}); look at the data before trusting any W"
+            )
+        else:
+            lines.append(
+                f"  -> no W for {product}: no candidate up to {CANDIDATES_MS[-1]} ms is within "
+                f"{MARGIN:.0%} points of the {WIDE_MS} ms coverage and at least the p90 of "
+                f"|difference|; look at the data before trusting any W"
             )
         lines.append("")
     known = [w for w in chosen if w is not None]

@@ -344,9 +344,12 @@ def test_engine_settings_from_env():
             "EXCHANGE_MATCH_WINDOW_MS": "150",
             "EXCHANGE_DEPLETION_MAX_AGE_SECONDS": "3",
             "EXCHANGE_CANCEL_ATTRIBUTION": "pessimistic",
+            "EXCHANGE_MATCH_WINDOW_MS_ETH_USD": "500",
         }
     )
     assert (s.match_window_ns, s.depletion_max_age_ns) == (150 * MS, 3_000_000_000)
+    assert (s.window_ns("ETH-USD"), s.window_ns("BTC-USD")) == (500 * MS, 150 * MS)
+    assert EngineSettings().window_ns("SOL-USD") == 300 * MS
     assert s.cancel_attribution is CancelAttribution.PESSIMISTIC
     assert EngineSettings.from_env({}) == EngineSettings()
 
