@@ -317,8 +317,12 @@ only (ADR 0002).
   ```
 
   It prints, per pair, the time between each shrink and its print and, for candidate windows, the
-  share of prints matched and of shrinks left unmatched, and picks W. Counts and milliseconds
-  only.
+  share of prints matched and of shrinks left unmatched, and picks W: the smallest window within 5
+  points of the 5 s coverage and at least the p90 of |print - shrink|. Counts and milliseconds
+  only. Over 28 live hours that gave **W = 300 ms** for all three pairs (`EXCHANGE_MATCH_WINDOW_MS`;
+  `EXCHANGE_MATCH_WINDOW_MS_<PAIR>` for one pair). It also found that about 99.9% of shrink
+  quantity is cancels, and that 5 to 17% of print quantity matches no visible shrink at all
+  (ADR 0014, Measured).
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 

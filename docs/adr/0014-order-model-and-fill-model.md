@@ -107,8 +107,8 @@ from prints) and optimistic (every cancel ahead). Growth at the price is orders 
 each pair it reports the time from each shrink to the print that explains it (an offline pass
 pairing each print with the nearest shrinks at its price, before or after it), and, running the
 engine's own matcher at candidate windows, how much print quantity is matched and how much shrink
-quantity is left unmatched. W is the smallest candidate that matches at least 99% of what a 5 s
-window matches; the result and the unmatched share at that W are in Measured below.
+quantity is left unmatched. The rule that picks W, the result and the unmatched share at that W
+are in Measured below.
 
 **How pessimistic: no maker fill without a print.** A cancel only moves an order forward; only
 (a), (b) and (c) fill it. A cancel can bring an order to the front, but nothing fills until
@@ -127,7 +127,8 @@ liquidity beyond the depletion map; virtual orders matching each other (they onl
 the real market, never at prices it didn't show); hidden or reserve liquidity (the honesty check
 measures how often prints appear where no level was visible); auctions, halts, self-trade
 prevention; volume-based fee tiers; venue rejections beyond grids, minimums and funds; latency
-beyond the fixed delay.
+beyond the fixed delay. The hidden-liquidity case is measured, not hypothetical: 5 to 17% of
+print quantity never matches a visible shrink (Measured below).
 
 ### How we know the fill model is honest (the week-5 fill-accuracy report)
 
@@ -154,6 +155,20 @@ minutes: fill probability within 10, 60 and 300 s, time to fill, and markouts (m
 - The default fill rate must lie inside the pessimistic/optimistic bracket; all three are shown.
 - Adverse selection: simulated maker markouts must be no better than real prints' at the same
   prices. Unacceptable: more than 1 bp better on average.
+
+**C. Known limit: prints the book never showed.** 17.3% / 12.8% / 5.1% of print quantity
+(BTC/ETH/SOL) matches no level shrink even within 5 s (Measured below): hidden or replenished
+liquidity, or a level refilled in the same update. No book-based simulator can explain those
+prints, so this is a hard ceiling on what A and B can account for on this venue, not an error to
+tune away. The report shows the share of print quantity with no matching shrink (the matcher's
+`print_unmatched` quantity over all print quantity) next to the taker and maker numbers, per pair
+and per window, so a change in it is visible.
+
+**D. The cancel bracket carries the queue.** About 99.9% of shrink quantity is cancels at every
+W (Measured), so the proportional-cancel rule, not prints, is what moves a resting order to the
+front. The pessimistic and optimistic runs are therefore the main uncertainty in every maker
+number, not a side check: the report shows maker fill rate, time to fill and markouts under all
+three modes, and a result that only holds under one of them is reported as such.
 
 A maker fill's price is its limit by construction, so A covers the PLAN's "price vs real prints
 in bps" and B covers whether and when makers fill.
@@ -189,7 +204,8 @@ measurement runs). It takes accepted orders from the account writer and reports 
 changes back to it. `on_event` first does what is due by the event's `received_at_ns` (orders
 and cancels taking effect, depletion and matcher expiry) against the book as it stood, then
 applies the event; `advance` does the same for quiet periods. Orders taking effect at the same
-moment go in arrival order. Settings: `EXCHANGE_MATCH_WINDOW_MS` (W),
+moment go in arrival order. Settings: `EXCHANGE_MATCH_WINDOW_MS` (W, 300; one pair with
+`EXCHANGE_MATCH_WINDOW_MS_<PAIR>`, e.g. `_ETH_USD`),
 `EXCHANGE_DEPLETION_MAX_AGE_SECONDS` (10), `EXCHANGE_CANCEL_ATTRIBUTION`
 (`proportional`, `pessimistic`, `optimistic`).
 
@@ -211,10 +227,66 @@ pausing while not SYNCED), `prints_no_aggressor`, `cancels:<mode>`, and
 - Off-grid orders are refused rather than rounded, so an agent must respect each pair's grid.
 - Market impact is out until v2, so large orders look better than they would be; the band limits
   how far an order can walk.
-- W, the band's binding rate, depletion expiries, ignored prints and the cause mix are measured,
-  not assumed, and land in this ADR's Measured section with #8.
+- W is measured from the recordings (Measured below). The band's binding rate, depletion
+  expiries, ignored prints and the cause mix are counted by the engine and reported by the
+  week-5 fill-accuracy report, not assumed.
+- Almost all book activity is cancels, so maker results depend on the cancel bracket (D above);
+  5 to 17% of print quantity is beyond what any book-based simulator can explain here (C above).
 
 ## Measured
 
-**W:** to be measured on the recordings with `tools/measure_fill_window.py` (the engine default,
-500 ms, is a placeholder until then).
+**W, 2026-10-15T16:00 to 2026-10-16T20:00 UTC** (28 contiguous hours of Gemini recordings,
+`python tools/measure_fill_window.py --start 2026-10-15T16:00 --hours 28`; 2.9M / 3.6M / 2.2M level
+shrinks for BTC / ETH / SOL; prints skipped because the book wasn't SYNCED: 1 / 0 / 0).
+
+Print time minus shrink time, quantity-weighted, ms:
+
+| | p1 | p50 | p99 | \|diff\| p50 | \|diff\| p90 | \|diff\| p99 |
+|---|---:|---:|---:|---:|---:|---:|
+| BTC-USD | -1793 | -65 | +116 | 75 | 203 | 2224 |
+| ETH-USD | -2355 | -69 | +1460 | 73 | 146 | 2981 |
+| SOL-USD | -2281 | -67 | +1295 | 71 | 173 | 2622 |
+
+Share of print quantity matched to a shrink, by W (the engine's own matcher):
+
+| W ms | 25 | 50 | 100 | 150 | 200 | **300** | 500 | 750 | 1000 | 2000 | 5000 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| BTC-USD | 17.1 | 26.0 | 59.9 | 72.1 | 73.8 | **77.8** | 79.7 | 80.1 | 80.3 | 81.9 | 82.7 |
+| ETH-USD | 15.1 | 23.5 | 68.9 | 79.0 | 80.3 | **81.3** | 82.2 | 83.8 | 84.2 | 85.4 | 87.2 |
+| SOL-USD | 19.3 | 31.1 | 74.5 | 84.0 | 88.2 | **89.9** | 91.0 | 91.7 | 92.0 | 93.2 | 94.9 |
+
+Shrink quantity left unmatched (cancels): 100.0% at every W up to 1 s on all three pairs, 99.9%
+at 2 s, 99.7 to 99.8% at 5 s. Shrink events left wholly unmatched at 300 ms: 99.6% / 99.9% /
+99.9%.
+
+**The rule.** W is the smallest candidate that is (1) within 5 percentage points of the coverage
+at the 5 s probe and (2) at least the p90 of |print - shrink|. If no candidate passes, no W is
+chosen, never the 5 s probe itself; and if the 5 s probe explains under 80% of print quantity, no
+W is chosen at all. The first rule (the smallest candidate reaching 99% of the 5 s coverage)
+picked 5000 ms on all three pairs: live coverage keeps creeping up with the window because a
+wider window also pairs prints with unrelated cancels, so a rule relative to the probe's own
+coverage runs to the end of the list. The 80% guard didn't catch that, since it only refuses on
+poor coverage. `tests/test_exchange_window.py` checks the rule gives 300, not 5000, on the BTC
+curve above.
+
+**W = 300 ms for all three pairs**, with `EXCHANGE_MATCH_WINDOW_MS_<PAIR>` as the per-pair
+override. 300 ms covers the |print - shrink| p90 (203 / 146 / 173 ms) with headroom. Going from 300
+ms to 5 s gains only 4.9 / 5.9 / 5.0 points for a window 16 times wider, which is mostly spurious
+pairing. By the rule, BTC gets 300 and SOL 300 (on a tie at the report's rounding: 89.9% against
+a cutoff of 89.9%). ETH's 300 ms is 0.9 points short of the margin, so the rule alone gives it 500
+ms. 300 ms is a deliberate override there: its p90 is the lowest of the three, so 300 covers it
+twice over, and the 0.9 points that 500 ms adds come from the long tail (ETH's |diff| p99 is
+2981 ms), the spurious pairing the margin exists to exclude.
+
+**Prints lead their shrinks.** At the median the print arrives 65 to 69 ms before the level
+shrink on all three pairs. That is consistent with ADR 0011's feed lags (trades p99 105 ms,
+depth p99 155 ms): the trade channel is faster than the depth channel. A window that allows more
+lead than lag is a possible refinement; it isn't built.
+
+**Almost all book activity is cancels.** About 99.9% of shrink quantity is unmatched at every W.
+The proportional-cancel rule is therefore what drives queue position, and the
+pessimistic/optimistic bracket in the honesty report matters more than first assumed (D above).
+
+**Prints the book never showed.** 17.3% / 12.8% / 5.1% of print quantity (BTC / ETH / SOL) has no
+matching shrink even within 5 s: the hidden or replenished liquidity this ADR anticipated, and a
+hard ceiling on what any book-based simulator can explain on this venue (C above).
