@@ -18,7 +18,10 @@ saying so explicitly.
   fixtures are hand-written or synthetic.
 - **Coinbase data never feeds agents, the matching engine or scoring** (its terms forbid using it
   to benchmark AI agents). The Coinbase adapter is off by default and only for feed research.
-- **One writer per trading pair** in the matching engine; no shared mutable state across pairs.
+- **One writer per trading pair for books and matching.** Balances are owned by a per-account
+  writer (ADR 0014): cash is shared across pairs, so it is the one deliberate exception. Pair
+  engines never touch balances; they report fills to the account writer. No other shared mutable
+  state across pairs. Don't fold the account writer into the pair engines.
 - **Never commit secrets**: no `.env`, keys (`*.key`, `*.pem`), tokens or passwords. Use
   `.env.example` for placeholders.
 - **No AI attribution** in commits or PR descriptions: no `Co-Authored-By` trailers, no
