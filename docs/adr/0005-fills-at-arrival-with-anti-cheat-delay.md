@@ -1,6 +1,7 @@
 # 0005. Fills at order arrival, with a stale-data guard and anti-cheat delay
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [0014](0014-order-model-and-fill-model.md) (point 5 is an
+  off-by-default stress mode; point 3's 2 s lag check is relaxed to the 5 s level2-age rule)
 - **Date:** 2026-10-13
 
 ## Context

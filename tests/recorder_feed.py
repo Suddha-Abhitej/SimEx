@@ -25,7 +25,7 @@ from simex.recorder.source import TP, SourceRecord
 
 TOPICS = topics_for("gemini")
 PAIRS = ("BTC-USD", "ETH-USD", "SOL-USD")
-# Like the live keys: BTC and SOL share a partition.
+# Two products share a partition, as two do live (ETH and SOL there), so the commit rule matters.
 PARTITION = {"BTC-USD": 0, "ETH-USD": 2, "SOL-USD": 0}
 GAPS_PARTITION = 1
 GRIDS = {  # (best bid, tick)

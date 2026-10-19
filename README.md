@@ -284,6 +284,26 @@ duckdb.sql("""
 """).show()
 ```
 
+### Exchange core: orders and balances
+
+`simex.exchange` holds the order model and the per-account balances
+([ADR 0014](docs/adr/0014-order-model-and-fill-model.md)); the fill simulator against the live
+book comes next (#8). Simulated money only (ADR 0002).
+
+- **Orders:** limit (good till cancelled) and market (IOC inside a per-pair band, 50 bps by
+  default, `EXCHANGE_MARKET_BAND_BPS`), and cancel. Quantities and prices are decimal strings on
+  the pair's price tick and size increment; off-grid orders are rejected, not rounded. Check the
+  table against Gemini with `python tools/gemini_symbols.py`.
+- **Idempotency:** `(account, client_order_id)` names one order forever; resubmitting returns it,
+  and the same key with a different order is refused.
+- **Cancels** take effect after the same anti-cheat delay as orders, so they can't dodge a fill.
+- **Balances** belong to one writer per account (cash is shared across pairs; the pair engines
+  only report fills). Orders reserve their worst-case cost up front.
+- **Fees** default to Gemini's entry tier, 60 bps maker and 120 bps taker
+  (`EXCHANGE_MAKER_FEE_BPS`, `EXCHANGE_TAKER_FEE_BPS`). **A round trip costs 1.8 to 2.4%**, so
+  fees dominate most strategies; results should always show gross P&L, fee drag and net P&L
+  separately.
+
 Or open the repo in a GitHub Codespace; the dev container installs everything.
 
 ## Decisions
