@@ -105,6 +105,7 @@ class AccountWriter:
         self.ledger = ledger
         self.halted = False
         self.halted_accounts: set[str] = set()
+        self.applied_sequences: dict[str, int] = {}
         self.orders: dict[str, Order] = {}
         self.by_key: dict[tuple[str, str], str] = {}
         self.band_prices: dict[str, Decimal] = {}  # market order -> the band edge it may reach
@@ -138,11 +139,16 @@ class AccountWriter:
             asset: balance.total for asset, balance in self.accounts.balances[account_id].items()
         }
 
+    def balance_snapshot(self, account_id: str) -> tuple[dict[str, Decimal], int | None]:
+        return self.balance_totals(account_id), self.applied_sequences.get(account_id)
+
     def restore(self, account_id: str) -> None:
         """Replace this writer's account state with the committed ledger state."""
         if self.ledger is None:
             raise ValueError("a ledger is required for restart recovery")
         state = self.ledger.load_account(account_id)
+        if state.latest_sequence is not None:
+            self.applied_sequences[account_id] = int(state.latest_sequence)
         for row in state.balances:
             self.accounts.balance(account_id, row["asset"]).available = Decimal(row["total"])
         for row in state.reservations:
@@ -162,7 +168,9 @@ class AccountWriter:
     def deposit(self, account_id: str, asset: str, amount: Decimal, event_key: str) -> None:
         self._require_running(account_id)
         if self.ledger is not None:
-            self.ledger.record_deposit(account_id, asset, amount, event_key)
+            sequence = self.ledger.record_deposit(account_id, asset, amount, event_key)
+            if sequence is not None:
+                self.applied_sequences[account_id] = sequence
         self.accounts.deposit(account_id, asset, amount)
 
     def _emit(self, kind: str, **fields) -> None:
@@ -289,13 +297,15 @@ class AccountWriter:
         self.accounts.settle(fill, instrument)
         if self.ledger is not None:
             try:
-                self.ledger.record_fill(
+                sequence = self.ledger.record_fill(
                     fill,
                     instrument,
                     order,
                     self.accounts.reservations.get(order.order_id),
                     self.band_prices.get(order.order_id),
                 )
+                if sequence is not None:
+                    self.applied_sequences[order.account_id] = sequence
             except Exception:
                 self.halted = True
                 raise

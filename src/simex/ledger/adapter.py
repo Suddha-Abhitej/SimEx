@@ -46,6 +46,7 @@ class AccountState:
     orders: tuple[dict[str, Any], ...]
     reservations: tuple[dict[str, Any], ...]
     balances: tuple[dict[str, Any], ...]
+    latest_sequence: int | None = None
 
 
 def fill_postings(fill: Fill, instrument: Instrument) -> tuple[Posting, ...]:
@@ -98,15 +99,16 @@ class LedgerAdapter:
         order: Order | None = None,
         reservation: Any | None = None,
         band_price: Decimal | None = None,
-    ) -> None:
+    ) -> int:
         """Persist a fill or halt after repeated failures; never silently drop it."""
         if self.halted:
             raise LedgerHalted("ledger is halted")
         last_error: Exception | None = None
         for attempt in range(self.retries):
             try:
-                await self._record_fill_once(fill, instrument, order, reservation, band_price)
-                return
+                return await self._record_fill_once(
+                    fill, instrument, order, reservation, band_price
+                )
             except LedgerIntegrityError:
                 if self.metrics is not None:
                     self.metrics.conflicts.inc()
@@ -127,7 +129,7 @@ class LedgerAdapter:
         order: Order | None,
         reservation: Any | None,
         band_price: Decimal | None,
-    ) -> None:
+    ) -> int:
         payload = fill.to_dict()
         domain = (
             fill.fill_id,
@@ -146,6 +148,12 @@ class LedgerAdapter:
         event_key = f"fill:{fill.fill_id}"
         transaction_started = monotonic_ns()
         async with self.connection.transaction():
+            sequence = await self.connection.fetchval(
+                "INSERT INTO ledger_transactions (transaction_id) VALUES ($1) "
+                "ON CONFLICT (transaction_id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id "
+                "RETURNING sequence",
+                event_key,
+            )
             self._observe("transaction_begin", monotonic_ns() - transaction_started)
             await self._fail("before_fill")
             row = await self.connection.fetchrow(
@@ -175,7 +183,7 @@ class LedgerAdapter:
                     raise LedgerIntegrityError(f"fill payload conflict for {fill.fill_id}")
                 if order is not None:
                     await self._save_order(order, reservation, band_price)
-                return
+                return sequence
             await self.connection.execute(
                 "INSERT INTO fills (fill_id, order_id, account_id, product_id, side, price, "
                 "quantity, liquidity, cause, fee, fee_asset, ts_ns, source_key) "
@@ -187,11 +195,13 @@ class LedgerAdapter:
             await self._fail("after_fill")
             for _index, posting in enumerate(fill_postings(fill, instrument)):
                 await self.connection.execute(
-                    "INSERT INTO ledger_postings (posting_id, transaction_id, fill_id, account_id, "
-                    "asset, amount, entry_type) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                    "INSERT INTO ledger_postings (posting_id, transaction_id, fill_id, "
+                    "transaction_sequence, account_id, asset, amount, entry_type) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
                     uuid.uuid4(),
                     event_key,
                     fill.fill_id,
+                    sequence,
                     posting.account_id,
                     posting.asset,
                     posting.amount,
@@ -228,6 +238,7 @@ class LedgerAdapter:
                 await self._save_order(order, reservation, band_price)
         await self._fail("after_commit")
         self._observe("commit", monotonic_ns() - transaction_started)
+        return sequence
 
     def _observe(self, phase: str, elapsed_ns: int) -> None:
         if self.metrics is not None:
@@ -295,17 +306,24 @@ class LedgerAdapter:
 
     async def record_deposit(
         self, account_id: str, asset: str, amount: Decimal, event_key: str
-    ) -> None:
+    ) -> int:
         if amount <= 0:
             raise ValueError("deposit amount must be positive")
         async with self.connection.transaction():
+            sequence = await self.connection.fetchval(
+                "INSERT INTO ledger_transactions (transaction_id) VALUES ($1) "
+                "ON CONFLICT (transaction_id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id "
+                "RETURNING sequence",
+                event_key,
+            )
             await self.connection.execute(
                 "INSERT INTO ledger_postings "
-                "(posting_id, transaction_id, fill_id, account_id, asset, amount, entry_type) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                "(posting_id, transaction_id, fill_id, transaction_sequence, account_id, asset, "
+                "amount, entry_type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
                 uuid.uuid4(),
                 event_key,
                 None,
+                sequence,
                 account_id,
                 asset,
                 amount,
@@ -313,16 +331,18 @@ class LedgerAdapter:
             )
             await self.connection.execute(
                 "INSERT INTO ledger_postings "
-                "(posting_id, transaction_id, fill_id, account_id, asset, amount, entry_type) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                "(posting_id, transaction_id, fill_id, transaction_sequence, account_id, asset, "
+                "amount, entry_type) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
                 uuid.uuid4(),
                 event_key,
                 None,
+                sequence,
                 EXTERNAL,
                 asset,
                 -amount,
                 "deposit",
             )
+        return sequence
 
     async def load_account(self, account_id: str) -> AccountState:
         orders = await self.connection.fetch(
@@ -345,23 +365,59 @@ class LedgerAdapter:
             "WHERE account_id=$1 GROUP BY account_id, asset",
             account_id,
         )
+        latest_sequence = await self.connection.fetchval(
+            "SELECT max(transaction_sequence) FROM ledger_postings WHERE account_id=$1",
+            account_id,
+        )
         return AccountState(
             tuple(dict(row) for row in orders),
             tuple(dict(row) for row in reservations),
             tuple(dict(row) for row in balances),
+            latest_sequence,
         )
 
-    async def fold_balances(self) -> dict[tuple[str, str], Decimal]:
-        rows = await self.connection.fetch(
-            "SELECT account_id, asset, SUM(amount) AS total FROM ledger_postings "
-            "GROUP BY account_id, asset"
-        )
-        return {(row["account_id"], row["asset"]): Decimal(row["total"]) for row in rows}
+    async def fold_balances(
+        self, account_id: str | None = None, through_sequence: int | None = None
+    ) -> dict[str, Decimal] | dict[tuple[str, str], Decimal]:
+        if account_id is None:
+            rows = await self.connection.fetch(
+                "SELECT account_id, asset, SUM(amount) AS total "
+                "FROM ledger_postings GROUP BY account_id, asset"
+            )
+            return {(row["account_id"], row["asset"]): Decimal(row["total"]) for row in rows}
+        if through_sequence is None:
+            rows = await self.connection.fetch(
+                "SELECT asset, SUM(amount) AS total FROM ledger_postings "
+                "WHERE account_id=$1 GROUP BY asset",
+                account_id,
+            )
+        else:
+            rows = await self.connection.fetch(
+                "SELECT asset, SUM(amount) AS total FROM ledger_postings "
+                "WHERE account_id=$1 AND transaction_sequence <= $2 GROUP BY asset",
+                account_id,
+                through_sequence,
+            )
+        return {row["asset"]: Decimal(row["total"]) for row in rows}
 
     async def double_entry_violations(self) -> tuple[tuple[str, str, Decimal], ...]:
+        state = await self.connection.fetchrow(
+            "SELECT verified_sequence FROM reconciliation_state WHERE state_id=true FOR UPDATE"
+        )
+        high_water = state["verified_sequence"]
         rows = await self.connection.fetch(
-            "SELECT transaction_id, asset, SUM(amount) AS total FROM ledger_postings "
-            "GROUP BY transaction_id, asset HAVING SUM(amount) <> 0"
+            "SELECT p.transaction_id, p.asset, SUM(p.amount) AS total "
+            "FROM ledger_postings p WHERE p.transaction_sequence > $1 "
+            "GROUP BY p.transaction_id, p.asset HAVING SUM(p.amount) <> 0",
+            high_water,
+        )
+        max_sequence = await self.connection.fetchval(
+            "SELECT coalesce(max(sequence), $1) FROM ledger_transactions WHERE sequence > $1",
+            high_water,
+        )
+        await self.connection.execute(
+            "UPDATE reconciliation_state SET verified_sequence=$1 WHERE state_id=true",
+            max_sequence,
         )
         return tuple((row["transaction_id"], row["asset"], Decimal(row["total"])) for row in rows)
 

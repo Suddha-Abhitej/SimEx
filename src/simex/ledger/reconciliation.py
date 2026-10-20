@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
 import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Protocol
+from typing import Any, Protocol
+
+import asyncpg
 
 from .metrics import LedgerMetrics
 
 RECONCILIATION_INTERVAL_SECONDS = 60.0
+RECONCILIATION_TIMEOUT_SECONDS = 30.0
 
 
 class ProjectionWriter(Protocol):
-    def balance_totals(self, account_id: str) -> dict[str, Decimal]: ...
+    def balance_snapshot(self, account_id: str) -> tuple[dict[str, Decimal], int | None]: ...
 
     def halt_account(self, account_id: str) -> None: ...
 
@@ -24,7 +30,9 @@ class ProjectionWriter(Protocol):
 
 
 class ProjectionLedger(Protocol):
-    def fold_balances(self) -> dict[tuple[str, str], Decimal]: ...
+    def fold_balances(
+        self, account_id: str, through_sequence: int | None
+    ) -> dict[str, Decimal]: ...
 
     def double_entry_violations(self) -> tuple[tuple[str, str, Decimal], ...]: ...
 
@@ -69,7 +77,6 @@ class ReconciliationJob:
         self.writers: dict[str, ProjectionWriter] = {}
         self.mismatches: dict[tuple[str, str], ReconciliationMismatch] = {}
         self._overrides: dict[tuple[str, str], int] = {}
-        self._last_success_monotonic: float | None = None
 
     def register_writer(self, account_id: str, writer: ProjectionWriter) -> None:
         self.writers[account_id] = writer
@@ -83,22 +90,16 @@ class ReconciliationJob:
 
     def run_once(self) -> tuple[ReconciliationMismatch, ...]:
         started = self.monotonic()
-        if self._last_success_monotonic is not None:
-            self.metrics.reconciliation_age_seconds.set(
-                max(0.0, started - self._last_success_monotonic)
-            )
         now_ns = self.clock_ns()
         self._refresh_override_metrics(now_ns)
-        ledger_totals = self.ledger.fold_balances()
         findings: list[ReconciliationMismatch] = []
         current_mismatch_keys: set[tuple[str, str]] = set()
         for account_id, writer in self.writers.items():
-            projection = writer.balance_totals(account_id)
-            assets = set(projection) | {
-                asset for owner, asset in ledger_totals if owner == account_id
-            }
+            projection, marker = writer.balance_snapshot(account_id)
+            ledger_totals = self.ledger.fold_balances(account_id, marker)
+            assets = set(projection) | set(ledger_totals)
             for asset in assets:
-                ledger_total = ledger_totals.get((account_id, asset), Decimal(0))
+                ledger_total = ledger_totals.get(asset, Decimal(0))
                 projection_total = projection.get(asset, Decimal(0))
                 if ledger_total == projection_total:
                     continue
@@ -110,10 +111,6 @@ class ReconciliationJob:
                 self.metrics.reconciliation_mismatch_active.labels(account_id, asset).set(1)
                 if (account_id, asset) not in self._overrides:
                     writer.halt_account(account_id)
-        for account_id, asset in self.mismatches:
-            if (account_id, asset) not in current_mismatch_keys:
-                self.metrics.reconciliation_mismatch_active.labels(account_id, asset).set(0)
-
         violations = self.ledger.double_entry_violations()
         self.metrics.double_entry_violation_active.set(int(bool(violations)))
         if violations:
@@ -122,8 +119,7 @@ class ReconciliationJob:
                 writer.halt_account(account_id)
         self.metrics.reconciliation_runs.inc()
         self.metrics.reconciliation_seconds.observe(self.monotonic() - started)
-        self._last_success_monotonic = self.monotonic()
-        self.metrics.reconciliation_age_seconds.set(0)
+        self.metrics.reconciliation_last_success_timestamp_seconds.set(now_ns / 1_000_000_000)
         return tuple(findings)
 
     def apply_override(
@@ -161,3 +157,128 @@ class ReconciliationJob:
         while True:
             await asyncio.to_thread(self.run_once)
             await asyncio.sleep(self.interval_seconds)
+
+
+class PostgresReconciliationStore:
+    """Dedicated read connection for reconciliation, isolated from the fill connection."""
+
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        timeout_seconds: float = RECONCILIATION_TIMEOUT_SECONDS,
+    ) -> None:
+        self.timeout_seconds = timeout_seconds
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run, name="simex-reconciliation", daemon=True)
+        self._ready = threading.Event()
+        self._error: BaseException | None = None
+        self._read_connection: Any = None
+        self._write_connection: Any = None
+        self._dsn = dsn
+        self._thread.start()
+        if not self._ready.wait(timeout_seconds):
+            raise RuntimeError("reconciliation connection startup timed out")
+        if self._error is not None:
+            raise RuntimeError("could not start reconciliation connection") from self._error
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_until_complete(self._start())
+        self._ready.set()
+        if self._error is None:
+            self._loop.run_forever()
+            self._loop.run_until_complete(self._stop())
+        self._loop.close()
+
+    async def _start(self) -> None:
+        try:
+            self._read_connection = await asyncpg.connect(self._dsn)
+            await self._read_connection.execute("SET default_transaction_read_only = on")
+            self._write_connection = await asyncpg.connect(self._dsn)
+        except BaseException as exc:
+            self._error = exc
+
+    async def _stop(self) -> None:
+        if self._read_connection is not None:
+            await self._read_connection.close()
+        if self._write_connection is not None:
+            await self._write_connection.close()
+
+    def _call(self, operation: Callable[[], Any]) -> Any:
+        future: Future[Any] = asyncio.run_coroutine_threadsafe(operation(), self._loop)
+        return future.result(timeout=self.timeout_seconds)
+
+    def fold_balances(self, account_id: str, through_sequence: int | None) -> dict[str, Decimal]:
+        if through_sequence is None:
+            return {}
+
+        async def query() -> dict[str, Decimal]:
+            rows = await self._read_connection.fetch(
+                "SELECT asset, SUM(amount) AS total FROM ledger_postings "
+                "WHERE account_id=$1 AND transaction_sequence <= $2 GROUP BY asset",
+                account_id,
+                through_sequence,
+            )
+            return {row["asset"]: Decimal(row["total"]) for row in rows}
+
+        return self._call(query)
+
+    def double_entry_violations(self) -> tuple[tuple[str, str, Decimal], ...]:
+        async def query() -> tuple[tuple[str, str, Decimal], ...]:
+            high_water = await self._write_connection.fetchval(
+                "SELECT verified_sequence FROM reconciliation_state WHERE state_id=true"
+            )
+            rows = await self._read_connection.fetch(
+                "SELECT p.transaction_id, p.asset, SUM(p.amount) AS total "
+                "FROM ledger_postings p WHERE p.transaction_sequence > $1 "
+                "GROUP BY p.transaction_id, p.asset HAVING SUM(p.amount) <> 0",
+                high_water,
+            )
+            max_sequence = await self._read_connection.fetchval(
+                "SELECT coalesce(max(sequence), $1) FROM ledger_transactions WHERE sequence > $1",
+                high_water,
+            )
+            await self._write_connection.execute(
+                "UPDATE reconciliation_state SET verified_sequence=$1 WHERE state_id=true",
+                max_sequence,
+            )
+            return tuple(
+                (row["transaction_id"], row["asset"], Decimal(row["total"])) for row in rows
+            )
+
+        return self._call(query)
+
+    def write_reconciliation_override(self, **payload: Any) -> None:
+        async def write() -> None:
+            await self._write_connection.execute(
+                "INSERT INTO ledger_events "
+                "(event_id, event_key, aggregate_type, aggregate_id, aggregate_seq, event_type, "
+                "occurred_at_ns, payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+                uuid.uuid4(),
+                payload["event_key"],
+                "reconciliation_override",
+                f"{payload['account_id']}:{payload['asset']}:{payload['event_key']}",
+                0,
+                "reconciliation_override",
+                payload["created_at_ns"],
+                json.dumps(
+                    {
+                        key: payload[key]
+                        for key in (
+                            "account_id",
+                            "asset",
+                            "actor",
+                            "reason",
+                            "created_at_ns",
+                            "expires_at_ns",
+                        )
+                    }
+                ),
+            )
+
+        self._call(write)
+
+    def close(self) -> None:
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join()

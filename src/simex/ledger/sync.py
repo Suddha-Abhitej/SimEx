@@ -138,11 +138,11 @@ class SyncLedger:
         order: Order,
         reservation: Any | None,
         band_price: Any | None = None,
-    ) -> None:
+    ) -> int:
         started = time.monotonic_ns()
         for attempt in range(3):
             try:
-                self._call(
+                sequence = self._call(
                     lambda adapter: adapter.record_fill(
                         fill, instrument, order, reservation, band_price
                     ),
@@ -150,7 +150,7 @@ class SyncLedger:
                 )
                 if self.metrics is not None:
                     self.metrics.observe("intent_to_ack", time.monotonic_ns() - started)
-                return
+                return sequence
             except TimeoutError as exc:
                 if attempt == 2:
                     if self.metrics is not None:
@@ -171,40 +171,13 @@ class SyncLedger:
     ) -> None:
         self._call(lambda adapter: adapter.save_order(order, reservation, band_price))
 
-    def record_deposit(self, account_id: str, asset: str, amount: Any, event_key: str) -> None:
-        self._call(lambda adapter: adapter.record_deposit(account_id, asset, amount, event_key))
+    def record_deposit(self, account_id: str, asset: str, amount: Any, event_key: str) -> int:
+        return self._call(
+            lambda adapter: adapter.record_deposit(account_id, asset, amount, event_key)
+        )
 
     def load_account(self, account_id: str) -> AccountState:
         return self._call(lambda adapter: adapter.load_account(account_id))
-
-    def fold_balances(self) -> dict[tuple[str, str], Any]:
-        return self._call(lambda adapter: adapter.fold_balances())
-
-    def double_entry_violations(self) -> tuple[tuple[str, str, Any], ...]:
-        return self._call(lambda adapter: adapter.double_entry_violations())
-
-    def write_reconciliation_override(
-        self,
-        *,
-        account_id: str,
-        asset: str,
-        actor: str,
-        reason: str,
-        created_at_ns: int,
-        expires_at_ns: int,
-        event_key: str,
-    ) -> None:
-        self._call(
-            lambda adapter: adapter.write_reconciliation_override(
-                account_id=account_id,
-                asset=asset,
-                actor=actor,
-                reason=reason,
-                created_at_ns=created_at_ns,
-                expires_at_ns=expires_at_ns,
-                event_key=event_key,
-            )
-        )
 
     def close(self) -> None:
         self._loop.call_soon_threadsafe(self._loop.stop)

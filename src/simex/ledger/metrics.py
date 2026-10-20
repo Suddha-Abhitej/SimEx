@@ -55,9 +55,9 @@ class LedgerMetrics:
             ["account_id", "asset"],
             registry=self.registry,
         )
-        self.reconciliation_age_seconds = Gauge(
-            "simex_ledger_reconciliation_age_seconds",
-            "Seconds since the last completed ledger reconciliation",
+        self.reconciliation_last_success_timestamp_seconds = Gauge(
+            "simex_ledger_reconciliation_last_success_timestamp_seconds",
+            "Unix timestamp of the last completed ledger reconciliation",
             registry=self.registry,
         )
         self.reconciliation_overrides = Gauge(

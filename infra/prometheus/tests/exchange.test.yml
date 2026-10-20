@@ -146,8 +146,8 @@ tests:
     input_series:
       - series: 'simex_ledger_reconciliation_mismatch_active{account_id="alice",asset="USD"}'
         values: '0 0 1 1 1'
-      - series: 'simex_ledger_reconciliation_age_seconds'
-        values: '0 60 180 180 180'
+      - series: 'simex_ledger_reconciliation_last_success_timestamp_seconds'
+        values: '100 100 100 100 100 100'
     alert_rule_test:
       - eval_time: 2m
         alertname: ExchangeLedgerBalanceMismatch
@@ -158,11 +158,11 @@ tests:
           - exp_labels: {severity: critical}
             exp_annotations:
               summary: "Ledger balance reconciliation mismatch detected"
-              description: "A ledger posting fold differs from an account writer projection. New order entry is halted for the affected account; investigate the labelled account and asset."
+              description: "A ledger mismatch or double-entry violation remains visible. New order entry may be halted for the affected account unless an audited override is currently active."
       - eval_time: 1m
         alertname: ExchangeLedgerReconciliationStale
         exp_alerts: []
-      - eval_time: 4m
+      - eval_time: 5m
         alertname: ExchangeLedgerReconciliationStale
         exp_alerts:
           - exp_labels: {severity: critical}

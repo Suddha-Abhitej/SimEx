@@ -76,18 +76,26 @@ Reconciliation compares the balance projection with SQL sums of postings using e
 equality and no tolerance. A mismatch fails closed, alerts, preserves history, and requires
 intervention; any manual override is durable, audited, scoped, expiring, and does not edit history.
 
-PR (c) implements this as a periodic full fold. The latest 24-hour recording window contained
-532,804 rows. A PostgreSQL 16 fold benchmark over that row count completed in 170.898 ms on the
-development x86 host, so the initial measured cadence is 60 seconds rather than an assumed round
-number; that leaves more than 99% of each interval outside the fold on the measured host. Oracle
-ARM64 performance is not verified from this Windows host and must be re-measured before relying on
-the cadence in production.
+PR (c) uses a dedicated read-only PostgreSQL connection for reconciliation, separate from the
+single fill-path connection. The full fold and the incremental double-entry scan are bounded by
+the writer's last applied transaction sequence, so a concurrent fill cannot create a false
+mismatch and verified history is not rescanned. The actual `ledger_postings` table currently has
+759 rows across 171 transactions (the table is still near-empty; 532,804 was a market-data
+recording count, not a ledger count). On PostgreSQL 16 on the development x86 host, the actual
+full fold measured 0.383 ms and the incremental double-entry query measured 0.854 ms. The
+observed Gemini fill rate is approximately 4--11 fills/minute; using the midpoint of 7.5
+fills/minute and five postings per fill projects about 3,942,000 postings/year. The measured
+queries therefore support a 60-second initial cadence, subject to re-measurement at projected
+table size and on Oracle ARM64, where CPU and storage performance differ.
 
 An audited reconciliation override is a `ledger_events` row containing the actor, creation time,
 reason, account, asset, and expiry. It never removes the mismatch finding or its alert. It only
 permits the affected account to resume while the expiry has not passed; expiry is checked on every
 reconciliation cycle and needs no second clearing action. No code path clears a mismatch without
-writing this event.
+writing this event. The active override set is intentionally in memory only in v1: a restart drops
+it, the mismatch re-halts the account on the next reconciliation run, and the durable override
+event is not read back yet. This is a known limitation and the fail-closed direction; a future
+version may restore audited overrides only after defining their expiry and restart semantics.
 
 This ADR moves to **Accepted** when the three approved ledger PRs are reviewed and merged:
 the schema/adapter foundation, account-writer and restart recovery integration, and the
