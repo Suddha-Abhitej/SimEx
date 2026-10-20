@@ -30,10 +30,14 @@ def fill(fill_id="order-1", side=Side.BUY):
 async def connection_or_skip():
     dsn = os.environ.get("SIMEX_TEST_POSTGRES_DSN")
     if not dsn:
+        if os.environ.get("SIMEX_REQUIRE_POSTGRES_TESTS") == "1":
+            raise RuntimeError("SIMEX_TEST_POSTGRES_DSN is required in this test job")
         pytest.skip("set SIMEX_TEST_POSTGRES_DSN for ledger integration tests")
     try:
         return await asyncpg.connect(dsn)
-    except OSError as exc:
+    except Exception as exc:
+        if os.environ.get("SIMEX_REQUIRE_POSTGRES_TESTS") == "1":
+            raise RuntimeError(f"Postgres unavailable: {exc}") from exc
         pytest.skip(f"Postgres unavailable: {exc}")
 
 

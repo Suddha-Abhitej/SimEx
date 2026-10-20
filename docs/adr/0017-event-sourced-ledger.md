@@ -44,6 +44,11 @@ Reconciliation compares the balance projection with SQL sums of postings using e
 equality and no tolerance. A mismatch fails closed, alerts, preserves history, and requires
 intervention; any manual override is durable, audited, scoped, expiring, and does not edit history.
 
+This ADR moves to **Accepted** when the three approved ledger PRs are reviewed and merged:
+the schema/adapter foundation, account-writer and restart recovery integration, and the
+projection/reconciliation job. Until then, it remains Proposed so the complete ledger contract
+can still be reviewed without implying that the later projection and recovery pieces exist.
+
 ## Consequences
 
 The ledger survives process restart and replay without duplicate fills and supports SQL
