@@ -217,6 +217,37 @@ class Order:
     closed_at_ns: int | None = None
     _fill_ids: list[str] = field(default_factory=list, repr=False)
 
+    @classmethod
+    def from_record(cls, record: Mapping) -> Order:
+        request = OrderRequest(
+            client_order_id=record["client_order_id"],
+            product_id=record["product_id"],
+            side=Side(record["side"]),
+            type=OrderType(record["type"]),
+            quantity=Decimal(record["quantity"]),
+            limit_price=(None if record["limit_price"] is None else Decimal(record["limit_price"])),
+        )
+        order = cls(
+            order_id=record["order_id"],
+            account_id=record["account_id"],
+            request=request,
+            created_at_ns=record["created_at_ns"],
+            effective_at_ns=record["effective_at_ns"],
+            status=OrderStatus(record["status"]),
+            filled_quantity=Decimal(record["filled_quantity"]),
+            filled_notional=Decimal(record["filled_notional"]),
+            maker_notional=Decimal(record["maker_notional"]),
+            taker_notional=Decimal(record["taker_notional"]),
+            fees=Decimal(record["fees"]),
+            fill_count=record["fill_count"],
+            reject_reason=record["reject_reason"],
+            cancel_requested_at_ns=record["cancel_requested_at_ns"],
+            cancel_effective_at_ns=record["cancel_effective_at_ns"],
+            closed_at_ns=record["closed_at_ns"],
+        )
+        order._fill_ids = [f"{order.order_id}-{i}" for i in range(1, order.fill_count + 1)]
+        return order
+
     @property
     def product_id(self) -> str:
         return self.request.product_id

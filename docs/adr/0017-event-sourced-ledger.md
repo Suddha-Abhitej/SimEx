@@ -34,6 +34,14 @@ transaction begin, each write boundary, commit, and writer acknowledgement. A ti
 the fill: retry with backoff, then halt market-event processing and new order entry, alert, and
 require intervention.
 
+The account writer persists order snapshots and reservations at the same mutation boundary as its
+in-memory `Accounts` projection. On restart it loads orders, reservations, and posting sums from
+Postgres before accepting new entry. The synchronous engine uses a dedicated asyncpg event-loop
+thread so a committed result is available before the in-memory mutation is acknowledged; the
+pair engine remains the sole owner of matching. A restarted resting order has no queue checkpoint:
+the pair engine places it at the back of the venue queue on the first synchronized book, with
+`ahead = 0` only when it improves the current best, and discards `crossed` and depletion state.
+
 Version 1 does not persist `ahead`, `crossed`, or the depletion map. Every restart restores a
 resting order at the back of the queue at the first synchronized book, or `ahead = 0` if it
 improves the current best. `crossed` resets to false and depletion state is discarded. Queue
