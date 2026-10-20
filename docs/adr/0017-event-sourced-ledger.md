@@ -49,7 +49,12 @@ semantic benefit. `SyncLedger` therefore owns one asyncpg connection and one pri
 thread. Calls are submitted with `run_coroutine_threadsafe` and are serialized by that single
 connection; this deliberately makes the ledger a per-account blocking mutation boundary rather
 than allowing concurrent writes to race the in-memory projection. Every call has a 500 ms hard
-timeout. A timeout is retried with backoff for fills and then raises `LedgerHalted`; it never
+timeout. On timeout, the loop-thread task is cancelled and the caller waits up to the
+`CANCELLATION_GRACE_SECONDS` grace period for it to settle; an unsettled operation makes the
+connection unusable and raises `LedgerHalted` immediately without retrying. A settled timeout is
+retried with backoff for fills because fill identity makes the write idempotent. Non-timeout
+connection errors at the fill boundary also raise `LedgerHalted` with the original error as its
+cause; they are never allowed to escape as a raw retryable-looking exception. The ledger never
 drops a fill or blocks forever. Startup waits at most five seconds for connection and migrations.
 Shutdown first stops the loop, joins the worker thread, and the worker closes the asyncpg
 connection before the thread exits, so no call can outlive the connection.

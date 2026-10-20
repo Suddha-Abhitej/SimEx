@@ -6,7 +6,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from typing import Any
 
 import asyncpg
@@ -17,6 +17,7 @@ from .adapter import AccountState, LedgerAdapter, LedgerHalted
 from .metrics import LedgerMetrics
 
 HARD_TIMEOUT_SECONDS = 0.5
+CANCELLATION_GRACE_SECONDS = 0.5
 STARTUP_TIMEOUT_SECONDS = 5.0
 
 
@@ -34,12 +35,16 @@ class SyncLedger:
         *,
         metrics: LedgerMetrics | None = None,
         hard_timeout_seconds: float = HARD_TIMEOUT_SECONDS,
+        cancellation_grace_seconds: float = CANCELLATION_GRACE_SECONDS,
     ) -> None:
         if hard_timeout_seconds <= 0:
             raise ValueError("hard_timeout_seconds must be positive")
+        if cancellation_grace_seconds <= 0:
+            raise ValueError("cancellation_grace_seconds must be positive")
         self._dsn = dsn
         self.metrics = metrics
         self.hard_timeout_seconds = hard_timeout_seconds
+        self.cancellation_grace_seconds = cancellation_grace_seconds
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, name="simex-ledger", daemon=True)
         self._ready = threading.Event()
@@ -89,18 +94,39 @@ class SyncLedger:
             raise RuntimeError("ledger connection is not available")
 
         async def invoke() -> Any:
+            task = asyncio.current_task()
+            if task is None:
+                raise RuntimeError("ledger operation has no asyncio task")
+            task_holder["task"] = task
             return await operation(adapter)
 
+        task_holder: dict[str, asyncio.Task[Any]] = {}
         future: Future[Any] = asyncio.run_coroutine_threadsafe(invoke(), self._loop)
         started = time.monotonic_ns()
         effective_timeout = self.hard_timeout_seconds if timeout is None else timeout
         try:
             return future.result(timeout=effective_timeout)
         except TimeoutError:
-            future.cancel()
             if self.metrics is not None:
                 self.metrics.timeouts.inc()
-            raise
+            task = task_holder.get("task")
+            if task is None:
+                self._loop.call_soon_threadsafe(future.cancel)
+                if self.metrics is not None:
+                    self.metrics.halts.inc()
+                raise LedgerHalted("ledger operation could not be cancelled") from None
+            # Cancel the task on its own loop; cancelling the cross-thread Future is not enough
+            # to prove that the asyncpg operation has stopped using the connection.
+            self._loop.call_soon_threadsafe(task.cancel)
+            try:
+                future.result(timeout=self.cancellation_grace_seconds)
+            except TimeoutError as exc:
+                if self.metrics is not None:
+                    self.metrics.halts.inc()
+                raise LedgerHalted("ledger cancellation did not settle") from exc
+            except CancelledError:
+                pass
+            raise TimeoutError from None
         finally:
             if self.metrics is not None:
                 self.metrics.observe("writer_ack", time.monotonic_ns() - started)
@@ -130,7 +156,15 @@ class SyncLedger:
                     if self.metrics is not None:
                         self.metrics.halts.inc()
                     raise LedgerHalted("ledger timeout halted fill processing") from exc
+                # The timed-out operation may have committed. Re-issuing is safe because the
+                # fill_id primary key and ON CONFLICT handling make the write idempotent.
                 time.sleep(0.05 * 2**attempt)
+            except LedgerHalted:
+                raise
+            except Exception as exc:
+                if self.metrics is not None:
+                    self.metrics.halts.inc()
+                raise LedgerHalted("ledger error halted fill processing") from exc
 
     def save_order(
         self, order: Order, reservation: Any | None, band_price: Any | None = None
