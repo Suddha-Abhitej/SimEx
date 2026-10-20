@@ -145,7 +145,7 @@ that must pass before the next phase starts.
 | --- | --- | --- |
 | Days 1–3 | Setup | Whole stack starts with one command |
 | Week 1 | Live data in | 24h run on Gemini with no unrecovered gaps; book matches fresh snapshots |
-| Week 2 | Exchange core | Demo: Claude trades live via MCP; ledger reconciles to the cent |
+| Week 2 | Exchange core | Demo: Claude trades live via MCP; ledger projection equals the sum of postings exactly, as Decimal values with no tolerance |
 | Week 3 | Plug-ins | A new agent connects using only the docs |
 | Week 4 | Features and agents | All agents run 72h unattended within the LLM cost cap |
 | Week 5 | Scoring | Private scoreboard shows live rankings and the reasoning behind each trade |
