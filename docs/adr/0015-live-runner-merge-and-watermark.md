@@ -60,12 +60,25 @@ due at the call's time, so the same orders met more or less depletion, and were 
 different times, depending on the cadence. The live/replay equality tests found it.
 
 **Late records.** A record received at or before a time already cleared, or sorting before one
-already released, is applied at once, so the book stays right, and counted
-(`simex_exchange_late_events`, `simex_exchange_late_seconds`; the `ExchangeLateRecords` alert).
-At the chosen H the count must stay 0. Every record is applied exactly once, late or not.
+already released, is applied at once, so the book stays right, logged with its type, and counted
+(`simex_exchange_late_events`, `simex_exchange_late_seconds`). Every record is applied exactly
+once, late or not. **A late record means the ordering margin was lost, not that the order was
+broken.** Usually no record sorting after it has been released for its pair yet, so it still
+lands in replay's position: in the second live run every hour matched its recorded digest,
+including one with 23 late records. What is lost is the guarantee for orders: the engine has
+already advanced past the late record's received time, so an order taking effect in that gap
+(the record's lateness, milliseconds) would have met a book without it. The digests can't show
+that, since there is no order entry yet; it is why H is set from the measured delivery tail
+(below). Late records come in bursts, so the `ExchangeLateRecords` alert fires on a rate, more
+than 20 in 10 minutes, not on any occurrence.
 
-**H = 100 ms by default** (`EXCHANGE_MERGE_HOLDBACK_MS`). `simex_exchange_delivery_seconds`
-(consume time minus received time) is what H has to cover. It counts steady state only: records
+**H = 250 ms by default** (`EXCHANGE_MERGE_HOLDBACK_MS`), set from the measured delivery
+distribution: about its 99.99th percentile on the laptop (Measured). The first version used
+100 ms, a guess; the second live run measured 99.973% of deliveries under it and 36 late records
+in 3 h 45 m. 250 ms raises the watermark lag to about 0.27 s, which costs nothing to an agent that
+decides in seconds, and buys back a near-absolute ordering margin. It is to be re-measured on
+Oracle. `simex_exchange_delivery_seconds` (consume time minus received time) is what H has to
+cover. It counts steady state only: records
 from a partition caught up at this fetch and the one before. The fetch that ends a catch-up
 carries backlog records whose "delay" is the backlog's age, so the catch-up after every start is
 left out, and the histogram's count is below `simex_exchange_events`. (The first version counted
@@ -80,8 +93,9 @@ is never already cleared, whatever H is. What can break the invariant is transpo
 stamped elsewhere that reaches the engine more than the delay plus the watermark lag later.
 `PairEngine.submit` now refuses such an order (`rejected_on_effect:arrived_after_effective`)
 instead of applying it to the wrong book. The watermark lag is H plus the fetch's wait: the
-runner waits `EXCHANGE_FETCH_MAX_WAIT_MS` (20) per fetch, so about 120 to 130 ms. Every order
-takes effect, in wall terms, about the delay plus that lag after it was submitted.
+runner waits `EXCHANGE_FETCH_MAX_WAIT_MS` (20) per fetch, so between H and H + 20 ms plus
+processing: 0.101 s was read at H = 100 ms; at 250 ms, about 0.25 to 0.27 s. Every order takes
+effect, in wall terms, about the delay plus that lag after it was submitted (about 0.45 s).
 
 **Cold start**, as the book service does it (ADR 0009): both topics from two snapshot-refresh
 intervals ago, so every partition starts behind and the backlog merges exactly. The end offsets
@@ -105,6 +119,9 @@ what happens on another.
 
 ## Consequences
 
+- The ordering margin for orders is statistical, not absolute: H covers the measured delivery
+  tail (about 99.99%), not every delivery. A host stall longer than H makes the records in
+  flight late; they are still applied, logged and, at a sustained rate, alerted on.
 - A live engine applies exactly replay's sequence, checked hour by hour against the recordings.
   So live fills are reproducible from the recordings, and the anti-cheat delay means what it
   says: an order meets the book of its effective time.
@@ -149,12 +166,43 @@ pairs, with limit orders submitted on the wall clock):
   Within each stream, recordings and the runner both keep Kafka order, so existing recordings
   replay as live consumers saw them; only an audit's cross-stream position, which changes no
   book, followed the earlier stamp.
-- **14 late records** (6 / 5 / 3 by pair), none in the matching hour. An out-of-order audit is late
-  whenever the watermark has passed its stamp by the time it is consumed. The runner now logs
-  each late record with its type and whether it came while catching up.
+  The recordings, read once in offset order, hold 67 out-of-order records, all audits, the
+  largest 177 ms back; the runner counted 87 because the restart re-read an hour of backlog.
+- **14 late records** (6 / 5 / 3 by pair), none in the matching hour. At the time they were put
+  down to the audits; that was a guess, and the second run disproved it: late records there were
+  all data records, from delivery over the hold-back (below). The first run didn't log them, so
+  its 14 can't be attributed; the runner now logs each one.
 - **Watermark lag 0.21 s on every pair**: H plus the 100 ms fetch wait the first version used
   (now 20 ms), plus processing. Above the order delay, which is harmless: see the delay invariant.
 - Delivery over 5 s: 604 of 2,119 trades and 1,832 of 114,452 level2 observations. That was the
   catch-up fetches, now left out (see H).
 
-A second run, after the ingestor fix and these changes, is to be recorded here.
+**Live on Gemini, second run** (2026-10-19 to 20, Windows laptop, 16 cores; with the ingestor's
+audit fix and the changes above; hold-back 100 ms; one restart, at 22:47 UTC):
+
+- `tools/merge_replay_check.py`: PASS. 18 complete hours, every one matching its recording,
+  **including 22:00 UTC, which contains the restart**: the runner's cold start read an hour back
+  and released that hour's backlog and live records in exactly replay's order.
+- **0 out-of-order records**: with audits stamped when published, every partition is in receive
+  order.
+- **Watermark lag 0.101 s** on every pair (H plus a fetch that returned at once).
+- **Delivery**, steady state only: nothing over 5 s. The catch-up exclusion is now even across
+  channels: about 24% of level2 records and 26% of trades are left out of the histogram, where
+  the first run left out about 30% of level2 and none of the trades.
+
+  | Delivery under | Share of steady-state records |
+  |---|---:|
+  | 100 ms | 99.973% |
+  | 150 ms | about 99.98% |
+  | 250 ms | about 99.99% |
+
+- **36 late records in 3 h 45 m**, all logged as `data`, none as `audit`, in steady state hours
+  after the restart (16:05, 16:48, 16:53, 17:14, 17:28, 18:06 and 18:09 PT). 57 steady-state
+  records took over 100 ms; the 36 late ones are among them. The hour with the most, 21:00 UTC
+  with 23, still matched its digest. This is the measured baseline the alert's rate is set
+  against.
+- **A burst of 13 late records inside one second at 18:09:32 PT.** That looks like a host stall
+  (the runner, or the ingestor, paused) rather than a feed event: one stall delays every record
+  in flight at once. The laptop has 16 cores. **To watch on Oracle**, where four services share
+  two cores: stalls there will be more frequent and longer, so the delivery tail and the late
+  rate must be re-measured, and H with them.

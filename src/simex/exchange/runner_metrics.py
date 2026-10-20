@@ -22,9 +22,11 @@ class RunnerMetrics:
         )
         self.late = Counter(
             "simex_exchange_late_events",
-            "Records that arrived after the watermark had passed their received time: applied "
-            "out of replay order, and each logged with its type. 0 when every partition is in "
-            "receive order and the hold-back covers delivery, after a restart too",
+            "Records that arrived after the watermark had passed their received time, each "
+            "logged with its type. Their delivery took longer than the hold-back: the ordering "
+            "margin was lost for them (an order effective in the gap would have missed them), "
+            "though most still land in replay's position. A few in bursts are normal; a "
+            "sustained rate means the hold-back is too short for this host",
             ["product_id", "channel"],
             registry=r,
         )

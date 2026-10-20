@@ -22,7 +22,9 @@ class RunnerSettings:
     # The merge's hold-back: a caught-up partition is taken to hold everything received up to
     # this long before the wall time it was seen caught up (ADR 0015). It covers the ingestor's
     # producer linger, the broker and the fetch wait below.
-    holdback_ms: float = 100.0
+    # 250 ms: set from the measured delivery distribution (ADR 0015, Measured), about the
+    # 99.99th percentile on the laptop; re-measure on Oracle.
+    holdback_ms: float = 250.0
     fetch_max_wait_ms: int = 20
     # The anti-cheat delay (#10 makes it configurable).
     order_delay_ms: float = 200.0
