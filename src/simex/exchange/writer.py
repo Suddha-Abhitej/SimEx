@@ -20,12 +20,12 @@ Hooks for the next issues, deliberately not implemented here:
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Protocol
 
 from .accounts import SYSTEM_ACCOUNTS, Accounts, InsufficientFunds, required_reservation
 from .fees import FeeSchedule, Liquidity
+from .gate import GateDecision
 from .instruments import BPS, Instrument
 from .orders import (
     Fill,
@@ -38,14 +38,6 @@ from .orders import (
     Side,
     order_id_for,
 )
-
-
-@dataclass(frozen=True)
-class GateDecision:
-    open: bool
-    reason: str | None = None  # why it's closed, e.g. "book_not_synced", "stale"
-    best_bid: Decimal | None = None
-    best_ask: Decimal | None = None
 
 
 class MarketGate(Protocol):

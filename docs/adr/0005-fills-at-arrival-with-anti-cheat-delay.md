@@ -1,6 +1,6 @@
 # 0005. Fills at order arrival, with a stale-data guard and anti-cheat delay
 
-- **Status:** Accepted, amended by [0014](0014-order-model-and-fill-model.md) (point 5 is no
+- **Status:** Superseded by [0016](0016-stale-data-guard-and-fill-timing.md); amended by [0014](0014-order-model-and-fill-model.md) (point 5 is no
   longer part of the fill path; point 3's 2 s lag check is relaxed to the 5 s level2-age rule)
 - **Date:** 2026-10-13
 

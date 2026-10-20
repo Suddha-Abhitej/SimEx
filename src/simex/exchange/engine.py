@@ -44,11 +44,14 @@ from simex.marketdata import BookAudit, BookUpdate, ResyncMarker, Trade, TradeDe
 
 from .attribution import Cancel, ShrinkMatcher, book_side_hit
 from .fees import Liquidity
+from .gate import MarketStatus
 from .orders import FillCause, Order, OrderStatus, OrderType, Side
 from .writer import AccountWriter
 
 ZERO = Decimal(0)
 SECOND = 1_000_000_000
+LAG_WINDOW_NS = 10 * 60 * SECOND
+LAG_BASELINE_NS = 10 * 60 * SECOND
 
 
 class BookCross(StrEnum):
@@ -76,6 +79,7 @@ class EngineSettings:
     depletion_max_age_ns: int = 10 * SECOND
     cancel_attribution: CancelAttribution = CancelAttribution.PROPORTIONAL
     book_cross: BookCross = BookCross.PRINT
+    lag_baseline_minutes: float = 10.0
 
     def window_ns(self, product_id: str) -> int:
         return self.match_window_ns_by_pair.get(product_id, self.match_window_ns)
@@ -108,6 +112,9 @@ class EngineSettings:
                 get("EXCHANGE_CANCEL_ATTRIBUTION", d.cancel_attribution.value)
             ),
             book_cross=BookCross(get("EXCHANGE_BOOK_CROSS", d.book_cross.value)),
+            lag_baseline_minutes=float(
+                get("EXCHANGE_LAG_BASELINE_MINUTES", d.lag_baseline_minutes)
+            ),
         )
 
 
@@ -164,6 +171,11 @@ class PairEngine:
         self.stats = EngineStats()
         self.now_ns = 0
         self._seq = 0
+        self._last_level2_received_ns: int | None = None
+        self._last_lag_ns: int | None = None
+        self._lag_samples: list[tuple[int, int]] = []
+        self._catching_up = False
+        self.status = MarketStatus(BookState.EMPTY, None, None, None, None, None)
 
     # Orders in -------------------------------------------------------------------------------
 
@@ -189,11 +201,66 @@ class PairEngine:
         if received is not None:
             self.advance(received)
         if isinstance(event, BookUpdate):
+            self._record_level2(event)
             self._on_book(event)
         elif isinstance(event, Trade):
             self._on_print(event)
         elif isinstance(event, ResyncMarker | BookAudit):
+            if isinstance(event, ResyncMarker):
+                self._catching_up = True
             self.book.apply(event)
+        self._publish_status()
+
+    @property
+    def market_status(self) -> MarketStatus:
+        return self.status
+
+    def _record_level2(self, update: BookUpdate) -> None:
+        self._last_level2_received_ns = update.received_at_ns
+        self._last_lag_ns = (
+            None if update.exchange_ts_ns is None else update.received_at_ns - update.exchange_ts_ns
+        )
+        if self._last_lag_ns is not None:
+            self._lag_samples.append((update.received_at_ns, self._last_lag_ns))
+            cutoff = update.received_at_ns - LAG_WINDOW_NS
+            index = 0
+            while index < len(self._lag_samples) and self._lag_samples[index][0] < cutoff:
+                index += 1
+            if index:
+                del self._lag_samples[:index]
+
+    def _publish_status(self) -> None:
+        baseline = bool(
+            self._lag_samples
+            and self._lag_samples[-1][0] - self._lag_samples[0][0]
+            >= int(self.settings.lag_baseline_minutes * 60 * SECOND)
+        )
+        median = None
+        excess = None
+        if self._lag_samples:
+            values = sorted(lag for _, lag in self._lag_samples)
+            median = (
+                values[len(values) // 2]
+                if len(values) % 2
+                else (values[len(values) // 2 - 1] + values[len(values) // 2]) // 2
+            )
+            if baseline and self._last_lag_ns is not None:
+                excess = self._last_lag_ns - median
+        bid = ask = None
+        if self.book.ready:
+            best_bid, best_ask = self.book.best_bid(), self.book.best_ask()
+            bid = best_bid[0] if best_bid else None
+            ask = best_ask[0] if best_ask else None
+        self.status = MarketStatus(
+            self.book.state,
+            self._last_level2_received_ns,
+            self._last_lag_ns,
+            excess,
+            bid,
+            ask,
+            self._catching_up,
+            baseline,
+        )
 
     def advance(self, now_ns: int) -> None:
         """Do what is due by now_ns, in time order. Each order and cancel takes effect at its
@@ -248,6 +315,11 @@ class PairEngine:
 
     def _take_effect(self, order: Order, now: int) -> None:
         if order.status.terminal:
+            return
+        if order.cancel_effective_at_ns is not None and order.cancel_effective_at_ns <= now:
+            if order.order_id in self.pending:
+                self.pending.remove(order.order_id)
+            self.writer.cancel_now(order.order_id, now)
             return
         decision = self.writer.gate.check(self.product_id, now)
         reason = None if decision.open else (decision.reason or "market_closed")
@@ -325,7 +397,10 @@ class PairEngine:
 
     def _on_book(self, update: BookUpdate) -> None:
         now = update.received_at_ns
+        if update.awaiting_snapshot:
+            self._catching_up = True
         if update.snapshot:
+            self._catching_up = False
             outcome = self.book.apply(update)
             for _ in self.depletion:
                 self.stats.add("depletion_expired:snapshot")
@@ -361,6 +436,9 @@ class PairEngine:
             return
         if self.book.state is not BookState.SYNCED:
             self.stats.add("prints_ignored_unsynced", trade.size)  # during a resync
+            return
+        if not self.writer.gate.check(self.product_id, trade.received_at_ns).open:
+            self.stats.add("prints_ignored_stale", trade.size)
             return
         if trade.aggressor not in ("buy", "sell"):
             self.stats.add("prints_no_aggressor", trade.size)

@@ -59,6 +59,24 @@ tests:
               summary: "An engine's watermark is 360 s behind the wall clock"
               description: "The runner isn't releasing records: it is stuck or far behind md.level2 or md.trades. Orders would wait; check the runner's log and Kafka."
 
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_gate_state{product_id="BTC-USD",state="stale_level2"}'
+        values: '1x20'
+      - series: 'simex_exchange_gate_state{product_id="BTC-USD",state="open"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ExchangeGateClosedTooLong
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ExchangeGateClosedTooLong
+        exp_alerts:
+          - exp_labels: {severity: warning, product_id: BTC-USD}
+            exp_annotations:
+              summary: "The BTC-USD market gate has been closed for 5 minutes"
+              description: "Orders are rejected and prints are ignored while the stale-data guard is closed. Inspect simex_exchange_gate_closed_seconds_total by reason and the level2 feed."
+
   # Caught up, with the hold-back's usual lag: never an alert.
   - interval: 1m
     input_series:

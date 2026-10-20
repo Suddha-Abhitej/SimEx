@@ -6,6 +6,8 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 
 from simex.book.orderbook import BookState
 
+from .gate import GateDecision, MarketStatus
+
 DELIVERY_BUCKETS = (0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0, 5.0)
 LATE_BUCKETS = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0, 5.0)
 
@@ -83,7 +85,46 @@ class RunnerMetrics:
             ["product_id"],
             registry=r,
         )
+        self.gate_state = Gauge(
+            "simex_exchange_gate_state",
+            "1 for the current gate state of each pair",
+            ["product_id", "state"],
+            registry=r,
+        )
+        self.gate_closed_seconds = Counter(
+            "simex_exchange_gate_closed_seconds",
+            "Seconds each pair spent closed, by gate reason",
+            ["product_id", "reason"],
+            registry=r,
+        )
+        self.rejections = Counter(
+            "simex_exchange_rejections",
+            "Orders rejected by reason",
+            ["product_id", "reason"],
+            registry=r,
+        )
+        self.lag_baseline = Gauge(
+            "simex_exchange_lag_baseline_established",
+            "1 after ten minutes of level2 lag samples establish the rolling baseline",
+            ["product_id"],
+            registry=r,
+        )
+        self._gate_last_ns: dict[str, tuple[int, str]] = {}
 
     def set_state(self, product: str, state: BookState) -> None:
         for s in BookState:
             self.state.labels(product, s.value).set(1 if s is state else 0)
+
+    def observe_gate(
+        self, product: str, status: MarketStatus, decision: GateDecision, now_ns: int
+    ) -> None:
+        reason = (decision.reason or "open").split(":", 1)[0]
+        for state in ("open", "book_not_synced", "catching_up", "stale_level2", "feed_lagging"):
+            self.gate_state.labels(product, state).set(1 if state == reason else 0)
+        self.lag_baseline.labels(product).set(1 if status.baseline_established else 0)
+        previous = self._gate_last_ns.get(product)
+        if previous is not None and previous[1] != "open":
+            self.gate_closed_seconds.labels(product, previous[1]).inc(
+                max(0, now_ns - previous[0]) / 1e9
+            )
+        self._gate_last_ns[product] = (now_ns, reason)
