@@ -27,9 +27,44 @@ jobs:
           --health-retries=12
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # Keep this guard: attribution footers change repository history and contributor credit.
+      - name: Reject AI attribution
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          pattern='co-authored-by:[[:space:]]*(claude|copilot|openai|chatgpt|anthropic|cursor|gemini|ai([[:space:]]|$))|generated[[:space:]]+with|generated[[:space:]]+by.*claude[[:space:]]+code|claude\.ai/code'
+
+          failed=0
+          while IFS= read -r commit; do
+            message="$(git show -s --format=%B "$commit")"
+            if printf '%s\n' "$message" | grep -Eiq "$pattern"; then
+              echo "::error::Commit $commit contains prohibited AI attribution."
+              echo "Amend it with 'git commit --amend' or remove it with an interactive 'git rebase', then force-push the branch."
+              failed=1
+            fi
+          done < <(git log --format='%H' "$BASE_SHA..$HEAD_SHA")
+
+          body="$(gh pr view "$PR_NUMBER" --json body --jq '.body // ""')"
+          if printf '%s\n' "$body" | grep -Eiq "$pattern"; then
+            echo "::error::Pull request #$PR_NUMBER contains prohibited AI attribution in its body."
+            echo "Edit the PR description to remove it, then rerun CI."
+            failed=1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
       - name: Install
         run: pip install -e ".[dev]"
       - name: Lint
