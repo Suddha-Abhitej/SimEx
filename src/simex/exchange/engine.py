@@ -166,6 +166,7 @@ class PairEngine:
         self.depletion: dict[tuple[str, Decimal], Depletion] = {}
         self.resting: dict[str, Resting] = {}
         self.pending: list[str] = []  # accepted orders waiting for their effective time
+        self._recovered_resting: list[Order] = []
         self.matcher = ShrinkMatcher(self.settings.window_ns(product_id))
         self.dedupe = TradeDeduper()
         self.stats = EngineStats()
@@ -193,6 +194,46 @@ class PairEngine:
             self.writer.reject_on_effect(order.order_id, "arrived_after_effective", self.now_ns)
             return
         self.pending.append(order.order_id)
+
+    def restore_orders(self, orders: list[Order]) -> None:
+        """Restore durable orders without restoring queue state or depletion state.
+
+        Orders that were already resting wait for the first synchronized book. They are then
+        placed behind the venue quantity at their price, except when they improve the current
+        best on their side, where the queue ahead is zero.
+        """
+        for order in orders:
+            if order.product_id != self.product_id or order.status.terminal:
+                continue
+            if order.status is OrderStatus.PENDING:
+                if order.order_id not in self.pending:
+                    self.pending.append(order.order_id)
+            else:
+                self._recovered_resting.append(order)
+
+    def _restore_resting(self) -> None:
+        if not self.book.ready:
+            return
+        while self._recovered_resting:
+            order = self._recovered_resting.pop(0)
+            if order.order_id in self.resting:
+                continue
+            levels = self.book.bids if order.side is Side.BUY else self.book.asks
+            best = self.book.best_bid() if order.side is Side.BUY else self.book.best_ask()
+            improves = (
+                best is None
+                or (order.side is Side.BUY and order.request.limit_price > best[0])
+                or (order.side is Side.SELL and order.request.limit_price < best[0])
+            )
+            ahead = ZERO if improves else levels.get(order.request.limit_price, ZERO)
+            self._seq += 1
+            self.resting[order.order_id] = Resting(
+                order.order_id,
+                order.side,
+                order.request.limit_price,
+                ahead,
+                self._seq,
+            )
 
     # Time ------------------------------------------------------------------------------------
 
@@ -414,6 +455,7 @@ class PairEngine:
                     levels = self.book.bids if resting.side is Side.BUY else self.book.asks
                     resting.ahead = min(resting.ahead, levels.get(resting.price, ZERO))
                 self._cross(now)
+                self._restore_resting()
             return
         if self.book.state is not BookState.SYNCED or update.awaiting_snapshot:
             self.book.apply(update)

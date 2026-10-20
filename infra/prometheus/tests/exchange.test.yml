@@ -115,3 +115,29 @@ tests:
       - eval_time: 20m
         alertname: ExchangeOrderDelayBelowFeedLagP99
         exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'simex_ledger_latency_seconds_bucket{phase="commit",le="0.05"}'
+        values: '0x10 0x10'
+      - series: 'simex_ledger_latency_seconds_bucket{phase="commit",le="0.1"}'
+        values: '0x10 100 200 300 400 500 600 700 800 900'
+      - series: 'simex_ledger_latency_seconds_bucket{phase="commit",le="0.25"}'
+        values: '0x10 100 200 300 400 500 600 700 800 900'
+      - series: 'simex_ledger_latency_seconds_bucket{phase="commit",le="0.5"}'
+        values: '0x10 100 200 300 400 500 600 700 800 900'
+      - series: 'simex_ledger_latency_seconds_bucket{phase="commit",le="1"}'
+        values: '0x10 100 200 300 400 500 600 700 800 900'
+      - series: 'simex_ledger_latency_seconds_bucket{phase="commit",le="+Inf"}'
+        values: '0x10 100 200 300 400 500 600 700 800 900'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ExchangeLedgerCommitP99TooHigh
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: ExchangeLedgerCommitP99TooHigh
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Ledger commit p99 is above the 50 ms budget"
+              description: "The ledger commit path is exceeding the approved 50 ms p99 budget. Check simex_ledger_latency_seconds, Postgres CPU and the host before accepting more order flow on the two-core deployment."

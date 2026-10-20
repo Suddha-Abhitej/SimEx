@@ -34,6 +34,38 @@ transaction begin, each write boundary, commit, and writer acknowledgement. A ti
 the fill: retry with backoff, then halt market-event processing and new order entry, alert, and
 require intervention.
 
+The account writer persists order snapshots and reservations at the same mutation boundary as its
+in-memory `Accounts` projection. On restart it loads orders, reservations, and posting sums from
+Postgres before accepting new entry. The synchronous engine uses a dedicated asyncpg event-loop
+thread so a committed result is available before the in-memory mutation is acknowledged; the
+pair engine remains the sole owner of matching. A restarted resting order has no queue checkpoint:
+the pair engine places it at the back of the venue queue on the first synchronized book, with
+`ahead = 0` only when it improves the current best, and discards `crossed` and depletion state.
+
+The engine stays synchronous because its matching and replay APIs are synchronous and their
+deterministic event ordering is already tested at that boundary. Making the engine async would
+propagate an API and scheduling change through every pair engine, runner, and test for no ledger
+semantic benefit. `SyncLedger` therefore owns one asyncpg connection and one private event-loop
+thread. Calls are submitted with `run_coroutine_threadsafe` and are serialized by that single
+connection; this deliberately makes the ledger a per-account blocking mutation boundary rather
+than allowing concurrent writes to race the in-memory projection. Every call has a 500 ms hard
+timeout. On timeout, the loop-thread task is cancelled and the caller waits up to the
+`CANCELLATION_GRACE_SECONDS` grace period for it to settle; an unsettled operation makes the
+connection unusable and raises `LedgerHalted` immediately without retrying. A settled timeout is
+retried with backoff for fills because fill identity makes the write idempotent. Non-timeout
+connection errors at the fill boundary also raise `LedgerHalted` with the original error as its
+cause; they are never allowed to escape as a raw retryable-looking exception. The ledger never
+drops a fill or blocks forever. Startup waits at most five seconds for connection and migrations.
+Shutdown first stops the loop, joins the worker thread, and the worker closes the asyncpg
+connection before the thread exits, so no call can outlive the connection.
+
+The ledger exports monotonic timing histograms for intent-to-acknowledgement, transaction begin,
+fill insert, postings, event insert, outbox insert, commit, and writer acknowledgement, plus
+counters for timeouts, conflicts, and halts. The commit p99 budget is 50 ms; the 500 ms timeout
+is a separate failure backstop. The `ExchangeLedgerCommitP99TooHigh` alert fires when the
+Prometheus p99 exceeds that budget, making the two-core Oracle deployment measurable rather than
+assumed.
+
 Version 1 does not persist `ahead`, `crossed`, or the depletion map. Every restart restores a
 resting order at the back of the queue at the first synchronized book, or `ahead = 0` if it
 improves the current best. `crossed` resets to false and depletion state is discarded. Queue
