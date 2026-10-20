@@ -40,6 +40,8 @@ saying so explicitly.
 - A significant design choice gets a short ADR in `docs/adr/` using `template.md`, and a row in
   `docs/adr/README.md`.
 - If a task is ambiguous, ask before building.
+- `.github/copilot-instructions.md` holds the same hard rules plus the measured constants, for
+  other coding agents. Change both together.
 
 ## Stack and environment
 
