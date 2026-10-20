@@ -72,6 +72,18 @@ Holding cancels instead could trap an agent during a feed outage.
 - Replay and live application are byte-identical for released market records and deterministic
   order IDs; the stale guard cannot create a fill or a take-effect while closed.
 
+### Ledger failure and restart boundaries
+
+- A fill reported by the engine is a fact, not a request. A ledger timeout or write failure must
+  never reject or drop it. The account writer retries with backoff; persistent failure halts
+  market-event processing and new order entry, alerts, and requires intervention. This is the
+  same fail-closed family as reconciliation mismatches.
+- Version 1 does not persist pair-engine queue state. On every process restart, resting orders
+  return to the back of the queue at the first synchronized book (`ahead` equals the current
+  venue quantity); an order improving the best price uses `ahead = 0` as in ADR 0014. The
+  `crossed` flag resets to false and the depletion map is discarded. Persisting queue state is
+  a possible later optimization only if measured restart frequency justifies its hot-path writes.
+
 ## Consequences
 
 The guard pauses fills and rejects new orders during feed failure without pretending that ignored

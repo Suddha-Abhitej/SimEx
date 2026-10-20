@@ -21,3 +21,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0014](0014-order-model-and-fill-model.md) | Order model, per-account balances, and the fill model | Accepted |
 | [0015](0015-live-runner-merge-and-watermark.md) | Live exchange runner: merge by received time, release to a watermark | Accepted |
 | [0016](0016-stale-data-guard-and-fill-timing.md) | Complete stale-data guard and fill timing rule set | Accepted |
+| [0017](0017-event-sourced-ledger.md) | Event-sourced ledger and durable fills | Proposed |

@@ -1,6 +1,7 @@
 # 0014. Order model, per-account balances, and the fill model
 
-- **Status:** Accepted. **Amends ADR 0005** (see "ADR 0005, amended" below).
+- **Status:** Accepted. **Amends ADR 0005** (see "ADR 0005, amended" below); amended by ADR 0017
+  to make the existing `_external` counterparty explicit.
 - **Date:** 2026-10-19
 
 ## Context
