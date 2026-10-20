@@ -320,6 +320,9 @@ def test_the_holdback_setting():
     with pytest.raises(ValueError):
         RunnerSettings(holdback_ms=-1)
     assert RunnerSettings.from_env({"EXCHANGE_MERGE_HOLDBACK_MS": "250"}).holdback_ms == 250
+    assert RunnerSettings.from_env({"EXCHANGE_ORDER_DELAY_MS": "125"}).order_delay_ms == 125
+    with pytest.raises(ValueError):
+        RunnerSettings.from_env({"EXCHANGE_ORDER_DELAY_MS": "-1"})
 
 
 def runner_on(kafka, **settings):

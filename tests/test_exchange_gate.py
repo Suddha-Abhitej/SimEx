@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal as D
 
 from simex.book import BookState
@@ -87,6 +88,14 @@ def test_trades_silence_does_not_refresh_or_close_the_level2_gate():
     engine.on_event(Trade("gemini", P, "2", D("101"), D("1"), "buy", T0, T0 + 6 * 1000 * MS))
     assert engine.stats.quantities["prints_ignored_stale"] == D("1")
     assert writer.gate.check(P, T0 + 6 * 1000 * MS).reason.startswith("stale_level2")
+
+
+def test_engine_publishes_rolling_p99_level2_lag():
+    engine, _ = _engine()
+    for i, lag_ms in enumerate((100, 200, 300), 1):
+        event = replace(_snapshot(T0 + i * MS), exchange_ts_ns=T0 + i * MS - lag_ms * MS)
+        engine.on_event(event)
+    assert engine.status.p99_lag_ns == 300 * MS
 
 
 def test_cancels_apply_while_gate_is_closed():

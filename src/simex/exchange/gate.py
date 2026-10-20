@@ -30,6 +30,7 @@ class MarketStatus:
     best_ask: Decimal | None
     catching_up: bool = False
     baseline_established: bool = False
+    p99_lag_ns: int | None = None
 
 
 @dataclass(frozen=True)

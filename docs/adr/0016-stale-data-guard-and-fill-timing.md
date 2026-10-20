@@ -16,9 +16,13 @@ ADRs.
 - Market-data events are applied per pair in `(received_at_ns, topic, partition, offset)` order
   below the live runner watermark (ADR 0015). Late records are applied once immediately and
   counted.
-- Orders and cancels are stamped on the market-data clock when they arrive. The default
-  anti-cheat delay is 200 ms; each takes effect at arrival plus that delay. The delay is
-  deliberately applied to cancels too.
+- Orders and cancels are stamped on the market-data clock when they arrive. The configured
+  fixed anti-cheat delay defaults to 200 ms (`EXCHANGE_ORDER_DELAY_MS`); each takes effect at
+  arrival plus that delay. The delay is deliberately applied to cancels too. There is no jitter.
+  A faster bot can gain at most our feed lag minus its own lag, so a delay at or above our
+  rolling p99 feed lag removes that edge 99% of the time. The measured depth p99 is 155 ms on
+  the dev laptop, clock-corrected. This must be re-measured on Oracle, where the runner's
+  hold-back and watermark lag also change.
 - Exchange timestamps are used for candles and features, never for order age or level2
   staleness. Money remains exact `Decimal`.
 

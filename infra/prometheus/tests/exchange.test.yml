@@ -86,3 +86,32 @@ tests:
       - eval_time: 60m
         alertname: ExchangeWatermarkStalled
         exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_order_delay_seconds{product_id="BTC-USD"}'
+        values: '0.2x10'
+      - series: 'simex_exchange_feed_lag_p99_seconds{product_id="BTC-USD"}'
+        values: '0.1x10 0.3x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: ExchangeOrderDelayBelowFeedLagP99
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ExchangeOrderDelayBelowFeedLagP99
+        exp_alerts:
+          - exp_labels: {severity: warning, product_id: BTC-USD}
+            exp_annotations:
+              summary: "The BTC-USD order delay is below its feed-lag p99"
+              description: "A faster feed may regain an execution edge because the configured anti-cheat delay is below this pair's rolling p99 level2 lag. Re-measure the feed and raise EXCHANGE_ORDER_DELAY_MS if needed."
+
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_order_delay_seconds{product_id="ETH-USD"}'
+        values: '0.2x20'
+      - series: 'simex_exchange_feed_lag_p99_seconds{product_id="ETH-USD"}'
+        values: '0.2x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ExchangeOrderDelayBelowFeedLagP99
+        exp_alerts: []

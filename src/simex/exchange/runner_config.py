@@ -46,6 +46,8 @@ class RunnerSettings:
     def __post_init__(self) -> None:
         if self.holdback_ms < 0:
             raise ValueError(f"EXCHANGE_MERGE_HOLDBACK_MS can't be negative ({self.holdback_ms})")
+        if self.order_delay_ms < 0:
+            raise ValueError(f"EXCHANGE_ORDER_DELAY_MS can't be negative ({self.order_delay_ms})")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RunnerSettings:
@@ -66,6 +68,7 @@ class RunnerSettings:
             ),
             holdback_ms=float(get("EXCHANGE_MERGE_HOLDBACK_MS", d.holdback_ms)),
             fetch_max_wait_ms=int(get("EXCHANGE_FETCH_MAX_WAIT_MS", d.fetch_max_wait_ms)),
+            order_delay_ms=float(get("EXCHANGE_ORDER_DELAY_MS", d.order_delay_ms)),
             digest_path=get("EXCHANGE_DIGEST_PATH", d.digest_path),
             stale_after_ms=float(get("EXCHANGE_STALE_AFTER_MS", d.stale_after_ms)),
             max_excess_lag_ms=float(get("EXCHANGE_MAX_EXCESS_LAG_MS", d.max_excess_lag_ms)),

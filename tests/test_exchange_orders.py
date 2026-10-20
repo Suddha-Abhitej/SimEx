@@ -211,6 +211,17 @@ def test_orders_take_effect_after_the_delay():
     )
 
 
+def test_configured_delay_applies_to_orders_and_cancels():
+    configured = 125_000_000
+    w = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), Gate(), configured)
+    w.accounts.deposit("alice", "USD", D("100000"))
+    w.accounts.deposit("alice", "BTC", D("10"))
+    order = w.submit("alice", limit(), T0)
+    assert order.effective_at_ns == T0 + configured
+    cancel = w.request_cancel("alice", T0 + 7, order_id=order.order_id)
+    assert cancel.cancel_effective_at_ns == T0 + 7 + configured
+
+
 # Fills, fees and the state machine ------------------------------------------------------------
 
 

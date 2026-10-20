@@ -109,7 +109,22 @@ class RunnerMetrics:
             ["product_id"],
             registry=r,
         )
+        self.feed_lag_p99 = Gauge(
+            "simex_exchange_feed_lag_p99_seconds",
+            "Rolling p99 level2 feed lag over the engine's ten-minute window",
+            ["product_id"],
+            registry=r,
+        )
+        self.order_delay = Gauge(
+            "simex_exchange_order_delay_seconds",
+            "Configured fixed anti-cheat delay applied to orders and cancels",
+            ["product_id"],
+            registry=r,
+        )
         self._gate_last_ns: dict[str, tuple[int, str]] = {}
+
+    def set_order_delay(self, product: str, delay_ms: float) -> None:
+        self.order_delay.labels(product).set(delay_ms / 1000)
 
     def set_state(self, product: str, state: BookState) -> None:
         for s in BookState:
@@ -122,6 +137,9 @@ class RunnerMetrics:
         for state in ("open", "book_not_synced", "catching_up", "stale_level2", "feed_lagging"):
             self.gate_state.labels(product, state).set(1 if state == reason else 0)
         self.lag_baseline.labels(product).set(1 if status.baseline_established else 0)
+        self.feed_lag_p99.labels(product).set(
+            0 if status.p99_lag_ns is None else status.p99_lag_ns / 1e9
+        )
         previous = self._gate_last_ns.get(product)
         if previous is not None and previous[1] != "open":
             self.gate_closed_seconds.labels(product, previous[1]).inc(

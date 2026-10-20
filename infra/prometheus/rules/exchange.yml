@@ -38,3 +38,14 @@ groups:
           description: >-
             Orders are rejected and prints are ignored while the stale-data guard is closed.
             Inspect simex_exchange_gate_closed_seconds_total by reason and the level2 feed.
+      - alert: ExchangeOrderDelayBelowFeedLagP99
+        expr: simex_exchange_order_delay_seconds < simex_exchange_feed_lag_p99_seconds
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.product_id }} order delay is below its feed-lag p99"
+          description: >-
+            A faster feed may regain an execution edge because the configured anti-cheat delay
+            is below this pair's rolling p99 level2 lag. Re-measure the feed and raise
+            EXCHANGE_ORDER_DELAY_MS if needed.
