@@ -173,6 +173,9 @@ class ExchangeRunner:
         self.unparsed = 0
         self._was_caught_up: set[tuple[str, int]] = set()  # at the previous fetch
         self._writer_events_seen = 0
+        self._delay_logged: set[str] = set()
+        for product in settings.pairs:
+            metrics.set_order_delay(product, settings.order_delay_ms)
 
     async def start(self) -> None:
         partitions = await self.source.start()
@@ -194,6 +197,12 @@ class ExchangeRunner:
                 self.source.seek(topic, p, offset)
                 plan.append(f"{topic} p{p} {offset}..{ends[(topic, p)]}")
         log.info("reading from %.0f s ago: %s", self.settings.lookback_seconds, ", ".join(plan))
+        for product in self.settings.pairs:
+            log.info(
+                "%s anti-cheat delay %.0f ms vs recent level2 lag p99 unavailable at startup",
+                product,
+                self.settings.order_delay_ms,
+            )
 
     def handle(self, fetched: Fetched) -> None:
         """Merge one fetch and release what the watermarks allow."""
@@ -264,6 +273,17 @@ class ExchangeRunner:
             self.metrics.held.labels(product).set(merge.held)
             self.metrics.set_state(product, engine.book.state)
             self.metrics.observe_gate(product, engine.status, self.gate.check(product, now), now)
+            if engine.status.p99_lag_ns is not None and product not in self._delay_logged:
+                log.info(
+                    "%s anti-cheat delay %.0f ms vs recent level2 lag p99 %.1f ms%s",
+                    product,
+                    self.settings.order_delay_ms,
+                    engine.status.p99_lag_ns / 1e6,
+                    " (below p99)"
+                    if self.settings.order_delay_ms * MS < engine.status.p99_lag_ns
+                    else "",
+                )
+                self._delay_logged.add(product)
         for event in self.writer.events[self._writer_events_seen :]:
             if event["type"] == "order_rejected":
                 order = event["order"]

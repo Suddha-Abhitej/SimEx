@@ -237,8 +237,10 @@ class PairEngine:
         )
         median = None
         excess = None
+        p99 = None
         if self._lag_samples:
             values = sorted(lag for _, lag in self._lag_samples)
+            p99 = values[max(0, (99 * len(values) + 99) // 100 - 1)]
             median = (
                 values[len(values) // 2]
                 if len(values) % 2
@@ -260,6 +262,7 @@ class PairEngine:
             ask,
             self._catching_up,
             baseline,
+            p99,
         )
 
     def advance(self, now_ns: int) -> None:
