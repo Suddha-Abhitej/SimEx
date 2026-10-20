@@ -351,6 +351,55 @@ class LedgerAdapter:
             tuple(dict(row) for row in balances),
         )
 
+    async def fold_balances(self) -> dict[tuple[str, str], Decimal]:
+        rows = await self.connection.fetch(
+            "SELECT account_id, asset, SUM(amount) AS total FROM ledger_postings "
+            "GROUP BY account_id, asset"
+        )
+        return {(row["account_id"], row["asset"]): Decimal(row["total"]) for row in rows}
+
+    async def double_entry_violations(self) -> tuple[tuple[str, str, Decimal], ...]:
+        rows = await self.connection.fetch(
+            "SELECT transaction_id, asset, SUM(amount) AS total FROM ledger_postings "
+            "GROUP BY transaction_id, asset HAVING SUM(amount) <> 0"
+        )
+        return tuple((row["transaction_id"], row["asset"], Decimal(row["total"])) for row in rows)
+
+    async def write_reconciliation_override(
+        self,
+        *,
+        account_id: str,
+        asset: str,
+        actor: str,
+        reason: str,
+        created_at_ns: int,
+        expires_at_ns: int,
+        event_key: str,
+    ) -> None:
+        if not actor or not reason or expires_at_ns <= created_at_ns:
+            raise ValueError("override requires actor, reason and a future expiry")
+        payload = {
+            "account_id": account_id,
+            "asset": asset,
+            "actor": actor,
+            "reason": reason,
+            "created_at_ns": created_at_ns,
+            "expires_at_ns": expires_at_ns,
+        }
+        await self.connection.execute(
+            "INSERT INTO ledger_events "
+            "(event_id, event_key, aggregate_type, aggregate_id, aggregate_seq, event_type, "
+            "occurred_at_ns, payload) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+            uuid.uuid4(),
+            event_key,
+            "reconciliation_override",
+            f"{account_id}:{asset}:{event_key}",
+            0,
+            "reconciliation_override",
+            created_at_ns,
+            json.dumps(payload),
+        )
+
     async def _fail(self, boundary: str) -> None:
         if self.failure_hook is None:
             return

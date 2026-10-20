@@ -289,3 +289,37 @@ def test_persistent_ledger_failure_halts_without_acknowledging_a_fill():
             await conn.close()
 
     run(scenario())
+
+
+def test_projection_fold_and_override_are_durable():
+    async def scenario():
+        conn = await connection_or_skip()
+        try:
+            adapter = LedgerAdapter(conn)
+            await adapter.migrate()
+            current = fill(f"test-reconcile-{os.getpid()}-1")
+            current = Fill(**{**current.__dict__, "account_id": f"reconcile-{os.getpid()}"})
+            await adapter.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"])
+            totals = await adapter.fold_balances()
+            assert totals[(current.account_id, "USD")] == -(current.notional + current.fee)
+            assert not await adapter.double_entry_violations()
+            await adapter.write_reconciliation_override(
+                account_id=current.account_id,
+                asset="USD",
+                actor="owner",
+                reason="investigating",
+                created_at_ns=10,
+                expires_at_ns=20,
+                event_key=f"override:{os.getpid()}",
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM ledger_events "
+                    "WHERE event_type = 'reconciliation_override'"
+                )
+                >= 1
+            )
+        finally:
+            await conn.close()
+
+    run(scenario())

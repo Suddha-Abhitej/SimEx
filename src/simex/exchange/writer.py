@@ -104,6 +104,7 @@ class AccountWriter:
         self.accounts = accounts or Accounts()
         self.ledger = ledger
         self.halted = False
+        self.halted_accounts: set[str] = set()
         self.orders: dict[str, Order] = {}
         self.by_key: dict[tuple[str, str], str] = {}
         self.band_prices: dict[str, Decimal] = {}  # market order -> the band edge it may reach
@@ -122,9 +123,20 @@ class AccountWriter:
             self.halted = True
             raise
 
-    def _require_running(self) -> None:
-        if self.halted:
+    def _require_running(self, account_id: str | None = None) -> None:
+        if self.halted or (account_id is not None and account_id in self.halted_accounts):
             raise RuntimeError("account writer is halted")
+
+    def halt_account(self, account_id: str) -> None:
+        self.halted_accounts.add(account_id)
+
+    def lift_account_halt(self, account_id: str) -> None:
+        self.halted_accounts.discard(account_id)
+
+    def balance_totals(self, account_id: str) -> dict[str, Decimal]:
+        return {
+            asset: balance.total for asset, balance in self.accounts.balances[account_id].items()
+        }
 
     def restore(self, account_id: str) -> None:
         """Replace this writer's account state with the committed ledger state."""
@@ -148,7 +160,7 @@ class AccountWriter:
                 self.band_prices[order.order_id] = Decimal(row["market_band_price"])
 
     def deposit(self, account_id: str, asset: str, amount: Decimal, event_key: str) -> None:
-        self._require_running()
+        self._require_running(account_id)
         if self.ledger is not None:
             self.ledger.record_deposit(account_id, asset, amount, event_key)
         self.accounts.deposit(account_id, asset, amount)
@@ -161,7 +173,7 @@ class AccountWriter:
     def submit(self, account_id: str, request: OrderRequest | Mapping, now_ns: int) -> Order:
         """Accept or reject an order. Raises OrderError only for a malformed request or a reused
         idempotency key; every other refusal is a recorded REJECTED order."""
-        self._require_running()
+        self._require_running(account_id)
         if not isinstance(account_id, str) or not account_id or account_id in SYSTEM_ACCOUNTS:
             raise OrderError("bad_account", repr(account_id))
         if not isinstance(request, OrderRequest):
@@ -237,7 +249,7 @@ class AccountWriter:
         """Ask to cancel. It takes effect after the same delay as an order (ADR 0014), so fills
         in between stand. Idempotent: a finished order, or one already being cancelled, is
         returned unchanged."""
-        self._require_running()
+        self._require_running(account_id)
         if order_id is None and client_order_id is not None:
             order_id = self.by_key.get((account_id, client_order_id))
         order = self.orders.get(order_id) if order_id else None
@@ -263,7 +275,7 @@ class AccountWriter:
         ts_ns: int,
     ) -> Fill:
         order = self.orders[order_id]
-        self._require_running()
+        self._require_running(order.account_id)
         if order.request.type is OrderType.MARKET and liquidity is Liquidity.MAKER:
             raise ValueError("a market order never rests, so it can't fill as maker")
         if order.request.type is OrderType.MARKET:
@@ -295,30 +307,30 @@ class AccountWriter:
         return fill
 
     def activate(self, order_id: str, ts_ns: int) -> None:
-        self._require_running()
         order = self.orders[order_id]
+        self._require_running(order.account_id)
         order.activate()
         self._persist_order(order)
         self._emit("order_activated", order_id=order_id, ts_ns=ts_ns)
 
     def cancel_now(self, order_id: str, ts_ns: int) -> None:
-        self._require_running()
         order = self.orders[order_id]
+        self._require_running(order.account_id)
         order.cancel(ts_ns)
         self._close(order)
         self._emit("order_cancelled", order=order.to_dict())
 
     def expire(self, order_id: str, ts_ns: int) -> None:
-        self._require_running()
         order = self.orders[order_id]
+        self._require_running(order.account_id)
         order.expire(ts_ns)
         self._close(order)
         self._emit("order_expired", order=order.to_dict())
 
     def reject_on_effect(self, order_id: str, reason: str, ts_ns: int) -> None:
         """The gate closed between arrival and taking effect (#9)."""
-        self._require_running()
         order = self.orders[order_id]
+        self._require_running(order.account_id)
         order.reject(reason, ts_ns)
         self._close(order)
         self._emit("order_rejected", order=order.to_dict())

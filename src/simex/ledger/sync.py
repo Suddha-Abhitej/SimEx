@@ -177,6 +177,35 @@ class SyncLedger:
     def load_account(self, account_id: str) -> AccountState:
         return self._call(lambda adapter: adapter.load_account(account_id))
 
+    def fold_balances(self) -> dict[tuple[str, str], Any]:
+        return self._call(lambda adapter: adapter.fold_balances())
+
+    def double_entry_violations(self) -> tuple[tuple[str, str, Any], ...]:
+        return self._call(lambda adapter: adapter.double_entry_violations())
+
+    def write_reconciliation_override(
+        self,
+        *,
+        account_id: str,
+        asset: str,
+        actor: str,
+        reason: str,
+        created_at_ns: int,
+        expires_at_ns: int,
+        event_key: str,
+    ) -> None:
+        self._call(
+            lambda adapter: adapter.write_reconciliation_override(
+                account_id=account_id,
+                asset=asset,
+                actor=actor,
+                reason=reason,
+                created_at_ns=created_at_ns,
+                expires_at_ns=expires_at_ns,
+                event_key=event_key,
+            )
+        )
+
     def close(self) -> None:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()

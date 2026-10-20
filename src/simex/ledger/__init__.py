@@ -11,11 +11,19 @@ from .adapter import (
 )
 from .metrics import LedgerMetrics
 from .migration_runner import apply_migrations
+from .reconciliation import (
+    RECONCILIATION_INTERVAL_SECONDS,
+    ReconciliationJob,
+    ReconciliationMismatch,
+)
 from .sync import SyncLedger
 
 __all__ = [
     "LedgerAdapter",
     "LedgerMetrics",
+    "ReconciliationJob",
+    "ReconciliationMismatch",
+    "RECONCILIATION_INTERVAL_SECONDS",
     "AccountState",
     "LedgerHalted",
     "LedgerIntegrityError",

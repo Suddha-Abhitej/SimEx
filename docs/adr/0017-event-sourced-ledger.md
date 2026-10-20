@@ -76,6 +76,19 @@ Reconciliation compares the balance projection with SQL sums of postings using e
 equality and no tolerance. A mismatch fails closed, alerts, preserves history, and requires
 intervention; any manual override is durable, audited, scoped, expiring, and does not edit history.
 
+PR (c) implements this as a periodic full fold. The latest 24-hour recording window contained
+532,804 rows. A PostgreSQL 16 fold benchmark over that row count completed in 170.898 ms on the
+development x86 host, so the initial measured cadence is 60 seconds rather than an assumed round
+number; that leaves more than 99% of each interval outside the fold on the measured host. Oracle
+ARM64 performance is not verified from this Windows host and must be re-measured before relying on
+the cadence in production.
+
+An audited reconciliation override is a `ledger_events` row containing the actor, creation time,
+reason, account, asset, and expiry. It never removes the mismatch finding or its alert. It only
+permits the affected account to resume while the expiry has not passed; expiry is checked on every
+reconciliation cycle and needs no second clearing action. No code path clears a mismatch without
+writing this event.
+
 This ADR moves to **Accepted** when the three approved ledger PRs are reviewed and merged:
 the schema/adapter foundation, account-writer and restart recovery integration, and the
 projection/reconciliation job. Until then, it remains Proposed so the complete ledger contract

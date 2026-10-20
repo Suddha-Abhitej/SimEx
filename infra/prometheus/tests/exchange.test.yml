@@ -141,3 +141,31 @@ tests:
             exp_annotations:
               summary: "Ledger commit p99 is above the 50 ms budget"
               description: "The ledger commit path is exceeding the approved 50 ms p99 budget. Check simex_ledger_latency_seconds, Postgres CPU and the host before accepting more order flow on the two-core deployment."
+
+  - interval: 1m
+    input_series:
+      - series: 'simex_ledger_reconciliation_mismatch_active{account_id="alice",asset="USD"}'
+        values: '0 0 1 1 1'
+      - series: 'simex_ledger_reconciliation_age_seconds'
+        values: '0 60 180 180 180'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ExchangeLedgerBalanceMismatch
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ExchangeLedgerBalanceMismatch
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Ledger balance reconciliation mismatch detected"
+              description: "A ledger posting fold differs from an account writer projection. New order entry is halted for the affected account; investigate the labelled account and asset."
+      - eval_time: 1m
+        alertname: ExchangeLedgerReconciliationStale
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: ExchangeLedgerReconciliationStale
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Ledger reconciliation is stale"
+              description: "No successful ledger reconciliation has completed within two configured intervals. Check the reconciliation task, Postgres and the ledger metrics endpoint."
