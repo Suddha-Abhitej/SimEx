@@ -76,6 +76,35 @@ Reconciliation compares the balance projection with SQL sums of postings using e
 equality and no tolerance. A mismatch fails closed, alerts, preserves history, and requires
 intervention; any manual override is durable, audited, scoped, expiring, and does not edit history.
 
+PR (c) uses a dedicated read-only PostgreSQL connection for reconciliation, separate from the
+single fill-path connection. The full fold and the incremental double-entry scan are bounded by
+the writer's last applied transaction sequence, so a concurrent fill cannot create a false
+mismatch and verified history is not rescanned. This bounded fold is a coherent cut only because
+one writer connection commits one ledger transaction at a time and
+`ledger_transactions.sequence` is assigned at insert; adding a second ledger-writing connection
+could make the fold silently miss committed postings. The actual `ledger_postings` table currently has
+759 rows across 171 transactions (the table is still near-empty; 532,804 was a market-data
+recording count, not a ledger count). On PostgreSQL 16 on the development x86 host, the actual
+full fold measured 0.383 ms and the incremental double-entry query measured 0.854 ms. The
+observed Gemini fill rate is approximately 4--11 fills/minute; using the midpoint of 7.5
+fills/minute and five postings per fill projects about 3,942,000 postings/year. The measured
+queries therefore support a 60-second initial cadence, subject to re-measurement at projected
+table size and on Oracle ARM64, where CPU and storage performance differ. Because these timings
+were measured at the current near-empty table size rather than at the projected four-million-row
+size, the 60-second cadence is provisional.
+
+An audited reconciliation override is a `ledger_events` row containing the actor, creation time,
+reason, account, asset, and expiry. It never removes the mismatch finding or its alert. It only
+permits the affected account to resume while the expiry has not passed; expiry is checked on every
+reconciliation cycle and needs no second clearing action. No code path clears a mismatch without
+writing this event. The active override set is intentionally in memory only in v1: a restart drops
+it, the mismatch re-halts the account on the next reconciliation run, and the durable override
+event is not read back yet. This is a known limitation and the fail-closed direction; a future
+version may restore audited overrides only after defining their expiry and restart semantics.
+The reconciliation write connection is a second writer to `ledger_events`; this is safe because
+override event keys are unique and idempotent, but it is an explicit exception to the otherwise
+single-writer wording for ledger mutations.
+
 This ADR moves to **Accepted** when the three approved ledger PRs are reviewed and merged:
 the schema/adapter foundation, account-writer and restart recovery integration, and the
 projection/reconciliation job. Until then, it remains Proposed so the complete ledger contract

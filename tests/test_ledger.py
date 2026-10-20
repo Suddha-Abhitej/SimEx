@@ -1,6 +1,7 @@
 import asyncio
 import os
 import threading
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -284,6 +285,72 @@ def test_persistent_ledger_failure_halts_without_acknowledging_a_fill():
                     "SELECT count(*) FROM fills WHERE fill_id = $1", current.fill_id
                 )
                 == 0
+            )
+        finally:
+            await conn.close()
+
+    run(scenario())
+
+
+def test_projection_fold_and_override_are_durable():
+    async def scenario():
+        conn = await connection_or_skip()
+        try:
+            adapter = LedgerAdapter(conn)
+            await adapter.migrate()
+            current = fill(f"test-reconcile-{os.getpid()}-1")
+            current = Fill(**{**current.__dict__, "account_id": f"reconcile-{os.getpid()}"})
+            await adapter.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"])
+            totals = await adapter.fold_balances()
+            assert totals[(current.account_id, "USD")] == -(current.notional + current.fee)
+            assert not await adapter.double_entry_violations()
+            await adapter.write_reconciliation_override(
+                account_id=current.account_id,
+                asset="USD",
+                actor="owner",
+                reason="investigating",
+                created_at_ns=10,
+                expires_at_ns=20,
+                event_key=f"override:{os.getpid()}",
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM ledger_events "
+                    "WHERE event_type = 'reconciliation_override'"
+                )
+                >= 1
+            )
+        finally:
+            await conn.close()
+
+    run(scenario())
+
+
+def test_double_entry_violation_remains_unresolved_across_scans():
+    async def scenario():
+        conn = await connection_or_skip()
+        try:
+            adapter = LedgerAdapter(conn)
+            await adapter.migrate()
+            current = fill(f"test-violation-{uuid.uuid4().hex}-1")
+            await adapter.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"])
+            await conn.execute(
+                "UPDATE ledger_postings SET amount = amount + 1 WHERE fill_id = $1 "
+                "AND entry_type = 'agent_payment'",
+                current.fill_id,
+            )
+
+            first = await adapter.double_entry_violations()
+            second = await adapter.double_entry_violations()
+
+            assert first == second
+            assert len(first) == 1
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM reconciliation_violations WHERE transaction_id = $1",
+                    f"fill:{current.fill_id}",
+                )
+                == 1
             )
         finally:
             await conn.close()

@@ -60,3 +60,23 @@ groups:
             The ledger commit path is exceeding the approved 50 ms p99 budget. Check
             simex_ledger_latency_seconds, Postgres CPU and the host before accepting more
             order flow on the two-core deployment.
+      - alert: ExchangeLedgerBalanceMismatch
+        expr: sum(simex_ledger_reconciliation_mismatch_active) > 0 or sum(simex_ledger_reconciliation_override_active) > 0 or simex_ledger_double_entry_violation_active > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ledger balance reconciliation mismatch detected"
+          description: >-
+            A ledger mismatch or double-entry violation remains visible. New order entry may be
+            halted for the affected account unless an audited override is currently active.
+      - alert: ExchangeLedgerReconciliationStale
+        expr: time() - simex_ledger_reconciliation_last_success_timestamp_seconds > 120
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ledger reconciliation is stale"
+          description: >-
+            No successful ledger reconciliation has completed within two configured intervals.
+            Check the reconciliation task, Postgres and the ledger metrics endpoint.
