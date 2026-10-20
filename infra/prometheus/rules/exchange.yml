@@ -28,3 +28,13 @@ groups:
           description: >-
             The runner isn't releasing records: it is stuck or far behind md.level2 or
             md.trades. Orders would wait; check the runner's log and Kafka.
+      - alert: ExchangeGateClosedTooLong
+        expr: sum by (product_id) (simex_exchange_gate_state{state!="open"}) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.product_id }} market gate has been closed for 5 minutes"
+          description: >-
+            Orders are rejected and prints are ignored while the stale-data guard is closed.
+            Inspect simex_exchange_gate_closed_seconds_total by reason and the level2 feed.

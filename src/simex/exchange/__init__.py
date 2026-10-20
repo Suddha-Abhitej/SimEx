@@ -6,6 +6,7 @@ Simulation only (ADR 0002): nothing here places a real order or moves real money
 from .accounts import EXTERNAL, FEES, MARKET, Accounts, InsufficientFunds
 from .engine import CancelAttribution, EngineSettings, PairEngine
 from .fees import FeeSchedule, Liquidity
+from .gate import GateDecision, GateState, MarketStatus, StaleDataGate
 from .instruments import DEFAULT_INSTRUMENTS, Instrument, instruments_from_env
 from .orders import (
     Fill,
@@ -18,7 +19,7 @@ from .orders import (
     OrderType,
     Side,
 )
-from .writer import AccountWriter, GateDecision, MarketGate
+from .writer import AccountWriter, MarketGate
 
 __all__ = [
     "DEFAULT_INSTRUMENTS",
@@ -33,11 +34,13 @@ __all__ = [
     "Fill",
     "FillCause",
     "GateDecision",
+    "GateState",
     "InsufficientFunds",
     "Instrument",
     "InvalidTransition",
     "Liquidity",
     "MarketGate",
+    "MarketStatus",
     "Order",
     "OrderError",
     "OrderRequest",
@@ -45,5 +48,6 @@ __all__ = [
     "OrderType",
     "PairEngine",
     "Side",
+    "StaleDataGate",
     "instruments_from_env",
 ]

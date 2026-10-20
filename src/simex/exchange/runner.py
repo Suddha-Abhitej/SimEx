@@ -30,7 +30,13 @@ from simex.book.orderbook import BookState
 from simex.marketdata import decode
 from simex.recorder.schema import Unrecordable, header
 
-from . import DEFAULT_INSTRUMENTS, AccountWriter, FeeSchedule, GateDecision
+from . import (
+    DEFAULT_INSTRUMENTS,
+    AccountWriter,
+    FeeSchedule,
+    GateDecision,
+    StaleDataGate,
+)
 from .engine import EngineSettings, PairEngine
 from .merge import Arrival, Bounds, PairMerge
 from .runner_config import RunnerSettings
@@ -50,11 +56,10 @@ class BookReadyGate:
         self.engines = engines
 
     def check(self, product_id: str, now_ns: int) -> GateDecision:
-        book = self.engines[product_id].book
-        if not book.ready:
+        status = self.engines[product_id].status
+        if status.book_state is not BookState.SYNCED:
             return GateDecision(False, "book_not_synced")
-        bid, ask = book.best_bid(), book.best_ask()
-        return GateDecision(True, None, bid[0] if bid else None, ask[0] if ask else None)
+        return GateDecision(True, None, status.best_bid, status.best_ask)
 
 
 class HourDigests:
@@ -142,10 +147,16 @@ class ExchangeRunner:
         self.metrics = metrics
         self._wall_ns = wall_ns
         self.engines: dict[str, PairEngine] = {}
+        self.gate = StaleDataGate(
+            self.engines,
+            stale_after_ns=int(settings.stale_after_ms * MS),
+            max_excess_lag_ns=int(settings.max_excess_lag_ms * MS),
+            max_absolute_lag_ns=int(settings.max_absolute_lag_ms * MS),
+        )
         self.writer = AccountWriter(
             DEFAULT_INSTRUMENTS,
             FeeSchedule.from_env(),
-            BookReadyGate(self.engines),
+            self.gate,
             int(settings.order_delay_ms * MS),
         )
         engine_settings = engine_settings or EngineSettings.from_env()
@@ -161,6 +172,7 @@ class ExchangeRunner:
         self.watermarks: dict[str, int] = {}
         self.unparsed = 0
         self._was_caught_up: set[tuple[str, int]] = set()  # at the previous fetch
+        self._writer_events_seen = 0
 
     async def start(self) -> None:
         partitions = await self.source.start()
@@ -251,6 +263,13 @@ class ExchangeRunner:
             self.metrics.watermark_lag.labels(product).set(max(0, now - watermark) / 1e9)
             self.metrics.held.labels(product).set(merge.held)
             self.metrics.set_state(product, engine.book.state)
+            self.metrics.observe_gate(product, engine.status, self.gate.check(product, now), now)
+        for event in self.writer.events[self._writer_events_seen :]:
+            if event["type"] == "order_rejected":
+                order = event["order"]
+                reason = order.get("reject_reason", "unknown").split(":", 1)[0]
+                self.metrics.rejections.labels(order["product_id"], reason).inc()
+        self._writer_events_seen = len(self.writer.events)
 
     def _apply(self, arrival: Arrival, late: bool) -> None:
         self.digests.add(arrival, late)

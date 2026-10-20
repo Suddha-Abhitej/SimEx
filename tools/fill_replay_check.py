@@ -21,6 +21,7 @@ points only; no prices (ADR 0010).
 Usage:
     python tools/fill_replay_check.py --start 2026-10-16T12:00 --hours 1
     python tools/fill_replay_check.py --root data/recordings --start ... --hours 28
+    python tools/fill_replay_check.py --start ... --hours 1 --blackout 15
 """
 
 from __future__ import annotations
@@ -40,10 +41,11 @@ from simex.exchange import (
     FeeSchedule,
     GateDecision,
     PairEngine,
+    StaleDataGate,
 )
 from simex.exchange.accounts import SYSTEM_ACCOUNTS
 from simex.exchange.engine import BookCross
-from simex.marketdata import Trade, TradeDeduper, decode
+from simex.marketdata import BookUpdate, Trade, TradeDeduper, decode
 from simex.recorder.replay import read
 
 SECOND = 1_000_000_000
@@ -63,18 +65,14 @@ RUNS = [
 
 
 class BookGate:
-    """Open while the pair's book is SYNCED, with its best prices (the #9 staleness rule is
-    not part of this check)."""
+    """The replay gate, with optional level2 blackouts for the live guard smoke test."""
 
     def __init__(self) -> None:
         self.engines: dict[str, PairEngine] = {}
+        self.stale = StaleDataGate(self.engines)
 
     def check(self, product_id: str, now_ns: int) -> GateDecision:
-        book = self.engines[product_id].book
-        if not book.ready:
-            return GateDecision(False, "book_not_synced")
-        bid, ask = book.best_bid(), book.best_ask()
-        return GateDecision(True, None, bid[0] if bid else None, ask[0] if ask else None)
+        return self.stale.check(product_id, now_ns)
 
 
 def mid(engine: PairEngine) -> Decimal | None:
@@ -148,6 +146,8 @@ class Run:
         self.markouts = Markouts()
         self.seen = 0
         self.ids = 0
+        self.closed_seconds: Counter[tuple[str, str]] = Counter()
+        self._gate_seen: dict[str, tuple[int, str]] = {}
 
     def on_event(self, event) -> None:
         engine = self.gate.engines.get(event.product_id)
@@ -155,6 +155,12 @@ class Run:
             return
         engine.on_event(event)
         now = getattr(event, "received_at_ns", 0)
+        decision = self.gate.check(engine.product_id, now)
+        reason = (decision.reason or "open").split(":", 1)[0]
+        previous = self._gate_seen.get(engine.product_id)
+        if previous is not None and previous[1] != "open":
+            self.closed_seconds[(engine.product_id, previous[1])] += max(0, now - previous[0])
+        self._gate_seen[engine.product_id] = (now, reason)
         self._collect_fills()
         self.markouts.settle(engine, now)
         expiring = self.expiring[engine.product_id]
@@ -216,6 +222,9 @@ class Run:
             engine.advance(end_ns + 10 * SECOND)
             engine.matcher.expire(end_ns + 20 * SECOND)
         self._collect_fills()
+        for product, (started, reason) in self._gate_seen.items():
+            if reason != "open":
+                self.closed_seconds[(product, reason)] += max(0, end_ns - started)
 
     def money_problems(self) -> list[str]:
         out = []
@@ -262,6 +271,14 @@ class Run:
             k.split(":")[1]: v for k, v in sorted(c.items()) if k.startswith("depletion_expired:")
         }
         flag = "  <- RED FLAG: book_cross dominates" if cross_share > 0.5 else ""
+        closed = (
+            ", ".join(
+                f"{reason} {self.closed_seconds[(pair, reason)] / SECOND:.1f}s"
+                for pair, reason in self.closed_seconds
+                if pair == product
+            )
+            or "0s"
+        )
         return [
             f"  {self.name:>19}: passive filled as maker within {', '.join(rates)}"
             f" (of {len(rested)}; {len(probes) - len(rested)} crossed as taker on arrival)",
@@ -271,7 +288,8 @@ class Run:
             f"  {'':>19}  market orders {c['market_orders']}, band binds {c['band_binds']};"
             f" rejected on effect {rejected}; prints before the first snapshot"
             f" {c['prints_before_first_snapshot']}, during resyncs"
-            f" {c['prints_ignored_unsynced']}; depletion expired {expired or 0};"
+            f" {c['prints_ignored_unsynced']}, stale {c['prints_ignored_stale']}; depletion expired"
+            f" {expired or 0}; gate closed {closed};"
             f" print qty no shrink explains {unexplained:.1%}",
         ]
 
@@ -316,6 +334,12 @@ def main() -> int:
     parser.add_argument("--hours", type=float, default=1.0)
     parser.add_argument("--every", type=float, default=60.0, help="seconds between probes")
     parser.add_argument("--lifetime", type=float, default=300.0, help="passive probe life, s")
+    parser.add_argument(
+        "--blackout",
+        type=float,
+        default=0.0,
+        help="skip md.level2 for this many seconds from the window start",
+    )
     args = parser.parse_args()
     start = parse_time(args.start)
     end = start + timedelta(hours=args.hours)
@@ -325,9 +349,24 @@ def main() -> int:
     # Real prints' makers, measured on the default run's books (every run's book is the same).
     real, dedupe, reference = Markouts(), TradeDeduper(), runs[0]
     records = 0
+    blackout_until = int((start.timestamp() + args.blackout) * SECOND)
+    snapshots_seen: set[str] = set()
     for rec in read(args.root, start, end, channels=["level2", "market_trades"]):
         records += 1
         for event in decode(rec.value):
+            if (
+                args.blackout > 0
+                and event.received_at_ns < blackout_until
+                and (
+                    not isinstance(event, BookUpdate)
+                    or not event.snapshot
+                    or event.product_id in snapshots_seen
+                )
+                and not isinstance(event, Trade)
+            ):
+                continue
+            if isinstance(event, BookUpdate) and event.snapshot:
+                snapshots_seen.add(event.product_id)
             for run in runs:
                 run.on_event(event)
             engine = reference.gate.engines.get(event.product_id)

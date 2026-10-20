@@ -28,6 +28,10 @@ class RunnerSettings:
     fetch_max_wait_ms: int = 20
     # The anti-cheat delay (#10 makes it configurable).
     order_delay_ms: float = 200.0
+    stale_after_ms: float = 5000.0
+    max_excess_lag_ms: float = 2000.0
+    max_absolute_lag_ms: float = 30000.0
+    lag_baseline_minutes: float = 10.0
     # Per pair and UTC hour, the order the runner released records in (for the replay check).
     digest_path: str = "data/exchange/merge-digests.jsonl"
 
@@ -63,4 +67,10 @@ class RunnerSettings:
             holdback_ms=float(get("EXCHANGE_MERGE_HOLDBACK_MS", d.holdback_ms)),
             fetch_max_wait_ms=int(get("EXCHANGE_FETCH_MAX_WAIT_MS", d.fetch_max_wait_ms)),
             digest_path=get("EXCHANGE_DIGEST_PATH", d.digest_path),
+            stale_after_ms=float(get("EXCHANGE_STALE_AFTER_MS", d.stale_after_ms)),
+            max_excess_lag_ms=float(get("EXCHANGE_MAX_EXCESS_LAG_MS", d.max_excess_lag_ms)),
+            max_absolute_lag_ms=float(get("EXCHANGE_MAX_ABS_LAG_MS", d.max_absolute_lag_ms)),
+            lag_baseline_minutes=float(
+                get("EXCHANGE_LAG_BASELINE_MINUTES", d.lag_baseline_minutes)
+            ),
         )
