@@ -25,6 +25,7 @@ class FakeLedger:
     def __init__(self, totals, violations=()):
         self.totals = totals
         self.violations = tuple(violations)
+        self.persisted_violations = list(self.violations)
         self.overrides = []
         self.markers = []
 
@@ -37,7 +38,10 @@ class FakeLedger:
         }
 
     def double_entry_violations(self):
-        return self.violations
+        for violation in self.violations:
+            if violation not in self.persisted_violations:
+                self.persisted_violations.append(violation)
+        return tuple(self.persisted_violations)
 
     def write_reconciliation_override(self, **payload):
         self.overrides.append(payload)
@@ -117,6 +121,33 @@ def test_double_entry_violation_halts_all_registered_accounts():
 
     assert writer.halted == {"alice"}
     assert job.metrics.registry.get_sample_value("simex_ledger_double_entry_violations_total") == 1
+    assert (
+        job.metrics.registry.get_sample_value(
+            "simex_ledger_double_entry_violation_active",
+            {"transaction_id": "fill:1", "asset": "USD"},
+        )
+        == 1
+    )
+
+
+def test_double_entry_violation_stays_active_after_clean_run():
+    ledger = FakeLedger({}, (("fill:1", "USD", Decimal("0.01")),))
+    writer = FakeWriter({})
+    job = make_job(ledger)
+    job.register_writer("alice", writer)
+
+    job.run_once()
+    ledger.violations = ()
+    job.run_once()
+
+    assert writer.halted == {"alice"}
+    assert (
+        job.metrics.registry.get_sample_value(
+            "simex_ledger_double_entry_violation_active",
+            {"transaction_id": "fill:1", "asset": "USD"},
+        )
+        == 1
+    )
 
 
 def test_override_is_audited_time_boxed_and_expires():

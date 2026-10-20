@@ -6,7 +6,7 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import CancelledError, Future
+from concurrent.futures import Future
 from typing import Any
 
 import asyncpg
@@ -14,10 +14,10 @@ import asyncpg
 from simex.exchange.orders import Fill, Order
 
 from .adapter import AccountState, LedgerAdapter, LedgerHalted
+from .cancellation import CANCELLATION_GRACE_SECONDS, cancel_and_settle
 from .metrics import LedgerMetrics
 
 HARD_TIMEOUT_SECONDS = 0.5
-CANCELLATION_GRACE_SECONDS = 0.5
 STARTUP_TIMEOUT_SECONDS = 5.0
 
 
@@ -109,23 +109,17 @@ class SyncLedger:
         except TimeoutError:
             if self.metrics is not None:
                 self.metrics.timeouts.inc()
-            task = task_holder.get("task")
-            if task is None:
-                self._loop.call_soon_threadsafe(future.cancel)
-                if self.metrics is not None:
-                    self.metrics.halts.inc()
-                raise LedgerHalted("ledger operation could not be cancelled") from None
-            # Cancel the task on its own loop; cancelling the cross-thread Future is not enough
-            # to prove that the asyncpg operation has stopped using the connection.
-            self._loop.call_soon_threadsafe(task.cancel)
             try:
-                future.result(timeout=self.cancellation_grace_seconds)
-            except TimeoutError as exc:
+                cancel_and_settle(
+                    self._loop,
+                    future,
+                    task_holder.get("task"),
+                    self.cancellation_grace_seconds,
+                )
+            except LedgerHalted:
                 if self.metrics is not None:
                     self.metrics.halts.inc()
-                raise LedgerHalted("ledger cancellation did not settle") from exc
-            except CancelledError:
-                pass
+                raise
             raise TimeoutError from None
         finally:
             if self.metrics is not None:

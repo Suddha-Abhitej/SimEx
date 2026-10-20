@@ -1,6 +1,7 @@
 import asyncio
 import os
 import threading
+import uuid
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -318,6 +319,38 @@ def test_projection_fold_and_override_are_durable():
                     "WHERE event_type = 'reconciliation_override'"
                 )
                 >= 1
+            )
+        finally:
+            await conn.close()
+
+    run(scenario())
+
+
+def test_double_entry_violation_remains_unresolved_across_scans():
+    async def scenario():
+        conn = await connection_or_skip()
+        try:
+            adapter = LedgerAdapter(conn)
+            await adapter.migrate()
+            current = fill(f"test-violation-{uuid.uuid4().hex}-1")
+            await adapter.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"])
+            await conn.execute(
+                "UPDATE ledger_postings SET amount = amount + 1 WHERE fill_id = $1 "
+                "AND entry_type = 'agent_payment'",
+                current.fill_id,
+            )
+
+            first = await adapter.double_entry_violations()
+            second = await adapter.double_entry_violations()
+
+            assert first == second
+            assert len(first) == 1
+            assert (
+                await conn.fetchval(
+                    "SELECT count(*) FROM reconciliation_violations WHERE transaction_id = $1",
+                    f"fill:{current.fill_id}",
+                )
+                == 1
             )
         finally:
             await conn.close()

@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from time import monotonic_ns
+from time import monotonic_ns, time_ns
 from typing import Any
 
 from simex.exchange.accounts import EXTERNAL, FEES, MARKET
@@ -406,20 +406,41 @@ class LedgerAdapter:
         )
         high_water = state["verified_sequence"]
         rows = await self.connection.fetch(
-            "SELECT p.transaction_id, p.asset, SUM(p.amount) AS total "
+            "SELECT p.transaction_id, p.asset, SUM(p.amount) AS total, "
+            "min(p.transaction_sequence) AS sequence "
             "FROM ledger_postings p WHERE p.transaction_sequence > $1 "
             "GROUP BY p.transaction_id, p.asset HAVING SUM(p.amount) <> 0",
             high_water,
+        )
+        for row in rows:
+            await self.connection.execute(
+                "INSERT INTO reconciliation_violations "
+                "(transaction_id, asset, total, sequence, first_seen_at_ns) "
+                "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (transaction_id, asset) DO NOTHING",
+                row["transaction_id"],
+                row["asset"],
+                row["total"],
+                row["sequence"],
+                time_ns(),
+            )
+        lowest_violation = await self.connection.fetchval(
+            "SELECT min(sequence) FROM reconciliation_violations"
         )
         max_sequence = await self.connection.fetchval(
             "SELECT coalesce(max(sequence), $1) FROM ledger_transactions WHERE sequence > $1",
             high_water,
         )
+        next_high_water = lowest_violation - 1 if lowest_violation is not None else max_sequence
         await self.connection.execute(
             "UPDATE reconciliation_state SET verified_sequence=$1 WHERE state_id=true",
-            max_sequence,
+            next_high_water,
         )
-        return tuple((row["transaction_id"], row["asset"], Decimal(row["total"])) for row in rows)
+        persisted = await self.connection.fetch(
+            "SELECT transaction_id, asset, total FROM reconciliation_violations"
+        )
+        return tuple(
+            (row["transaction_id"], row["asset"], Decimal(row["total"])) for row in persisted
+        )
 
     async def write_reconciliation_override(
         self,

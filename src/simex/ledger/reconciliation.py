@@ -15,6 +15,7 @@ from typing import Any, Protocol
 
 import asyncpg
 
+from .cancellation import CANCELLATION_GRACE_SECONDS, cancel_and_settle
 from .metrics import LedgerMetrics
 
 RECONCILIATION_INTERVAL_SECONDS = 60.0
@@ -93,7 +94,6 @@ class ReconciliationJob:
         now_ns = self.clock_ns()
         self._refresh_override_metrics(now_ns)
         findings: list[ReconciliationMismatch] = []
-        current_mismatch_keys: set[tuple[str, str]] = set()
         for account_id, writer in self.writers.items():
             projection, marker = writer.balance_snapshot(account_id)
             ledger_totals = self.ledger.fold_balances(account_id, marker)
@@ -105,18 +105,18 @@ class ReconciliationJob:
                     continue
                 mismatch = ReconciliationMismatch(account_id, asset, ledger_total, projection_total)
                 findings.append(mismatch)
-                current_mismatch_keys.add((account_id, asset))
                 self.mismatches[(account_id, asset)] = mismatch
                 self.metrics.reconciliation_mismatches.labels(account_id, asset).inc()
                 self.metrics.reconciliation_mismatch_active.labels(account_id, asset).set(1)
                 if (account_id, asset) not in self._overrides:
                     writer.halt_account(account_id)
         violations = self.ledger.double_entry_violations()
-        self.metrics.double_entry_violation_active.set(int(bool(violations)))
         if violations:
             self.metrics.double_entry_violations.inc(len(violations))
             for account_id, writer in self.writers.items():
                 writer.halt_account(account_id)
+        for transaction_id, asset, _total in violations:
+            self.metrics.double_entry_violation_active.labels(transaction_id, asset).set(1)
         self.metrics.reconciliation_runs.inc()
         self.metrics.reconciliation_seconds.observe(self.monotonic() - started)
         self.metrics.reconciliation_last_success_timestamp_seconds.set(now_ns / 1_000_000_000)
@@ -188,7 +188,7 @@ class PostgresReconciliationStore:
         self._ready.set()
         if self._error is None:
             self._loop.run_forever()
-            self._loop.run_until_complete(self._stop())
+        self._loop.run_until_complete(self._stop())
         self._loop.close()
 
     async def _start(self) -> None:
@@ -206,8 +206,26 @@ class PostgresReconciliationStore:
             await self._write_connection.close()
 
     def _call(self, operation: Callable[[], Any]) -> Any:
-        future: Future[Any] = asyncio.run_coroutine_threadsafe(operation(), self._loop)
-        return future.result(timeout=self.timeout_seconds)
+        task_holder: dict[str, asyncio.Task[Any]] = {}
+
+        async def invoke() -> Any:
+            task = asyncio.current_task()
+            if task is None:
+                raise RuntimeError("reconciliation operation has no asyncio task")
+            task_holder["task"] = task
+            return await operation()
+
+        future: Future[Any] = asyncio.run_coroutine_threadsafe(invoke(), self._loop)
+        try:
+            return future.result(timeout=self.timeout_seconds)
+        except TimeoutError:
+            cancel_and_settle(
+                self._loop,
+                future,
+                task_holder.get("task"),
+                CANCELLATION_GRACE_SECONDS,
+            )
+            raise TimeoutError from None
 
     def fold_balances(self, account_id: str, through_sequence: int | None) -> dict[str, Decimal]:
         if through_sequence is None:
@@ -230,21 +248,40 @@ class PostgresReconciliationStore:
                 "SELECT verified_sequence FROM reconciliation_state WHERE state_id=true"
             )
             rows = await self._read_connection.fetch(
-                "SELECT p.transaction_id, p.asset, SUM(p.amount) AS total "
+                "SELECT p.transaction_id, p.asset, SUM(p.amount) AS total, "
+                "min(p.transaction_sequence) AS sequence "
                 "FROM ledger_postings p WHERE p.transaction_sequence > $1 "
                 "GROUP BY p.transaction_id, p.asset HAVING SUM(p.amount) <> 0",
                 high_water,
+            )
+            for row in rows:
+                await self._write_connection.execute(
+                    "INSERT INTO reconciliation_violations "
+                    "(transaction_id, asset, total, sequence, first_seen_at_ns) "
+                    "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (transaction_id, asset) DO NOTHING",
+                    row["transaction_id"],
+                    row["asset"],
+                    row["total"],
+                    row["sequence"],
+                    time.time_ns(),
+                )
+            lowest_violation = await self._write_connection.fetchval(
+                "SELECT min(sequence) FROM reconciliation_violations"
             )
             max_sequence = await self._read_connection.fetchval(
                 "SELECT coalesce(max(sequence), $1) FROM ledger_transactions WHERE sequence > $1",
                 high_water,
             )
+            next_high_water = lowest_violation - 1 if lowest_violation is not None else max_sequence
             await self._write_connection.execute(
                 "UPDATE reconciliation_state SET verified_sequence=$1 WHERE state_id=true",
-                max_sequence,
+                next_high_water,
+            )
+            persisted = await self._write_connection.fetch(
+                "SELECT transaction_id, asset, total FROM reconciliation_violations"
             )
             return tuple(
-                (row["transaction_id"], row["asset"], Decimal(row["total"])) for row in rows
+                (row["transaction_id"], row["asset"], Decimal(row["total"])) for row in persisted
             )
 
         return self._call(query)

@@ -1,5 +1,6 @@
 import copy
 import os
+import threading
 import uuid
 from collections import defaultdict
 from decimal import Decimal as D
@@ -84,6 +85,32 @@ class MemoryLedger:
         return AccountState(tuple(orders), tuple(reservations), tuple(balances))
 
 
+class SequencedMemoryLedger(MemoryLedger):
+    def __init__(self):
+        super().__init__()
+        self.sequence = 0
+        self.history = {}
+
+    def _save_sequence(self, account_id):
+        self.sequence += 1
+        self.history[self.sequence] = {
+            asset: amount for (owner, asset), amount in self.balances.items() if owner == account_id
+        }
+        return self.sequence
+
+    def record_deposit(self, account_id, asset, amount, event_key):
+        super().record_deposit(account_id, asset, amount, event_key)
+        return self._save_sequence(account_id)
+
+    def record_fill(self, fill, instrument, order, reservation, band_price=None):
+        super().record_fill(fill, instrument, order, reservation, band_price)
+        return self._save_sequence(fill.account_id)
+
+    def fold(self, account_id, marker):
+        eligible = [sequence for sequence in self.history if sequence <= marker]
+        return self.history[max(eligible)] if eligible else {}
+
+
 def make_writer(ledger=None, account="alice"):
     writer = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), DELAY, ledger=ledger)
     writer.deposit(account, "USD", D("1000"), f"deposit:{account}:usd")
@@ -137,6 +164,39 @@ def test_persistent_ledger_failure_halts_writer_without_emitting_fill():
     assert not [event for event in writer.events if event["type"] == "fill"]
     with pytest.raises(RuntimeError, match="halted"):
         writer.submit("alice", order_payload("after-halt"), T0)
+
+
+def test_reconciliation_snapshots_stay_coherent_while_fills_commit():
+    ledger = SequencedMemoryLedger()
+    writer = make_writer(ledger)
+    order = writer.submit("alice", {**order_payload(), "quantity": "0.100"}, T0)
+    writer.activate(order.order_id, T0 + DELAY)
+    mismatches = []
+    stop = threading.Event()
+
+    def reconcile():
+        while not stop.is_set():
+            projection, marker = writer.balance_snapshot("alice")
+            if projection != ledger.fold("alice", marker):
+                mismatches.append((projection, marker))
+
+    thread = threading.Thread(target=reconcile)
+    thread.start()
+    try:
+        for index in range(50):
+            writer.record_fill(
+                order.order_id,
+                D("100"),
+                D("0.001"),
+                Liquidity.TAKER,
+                FillCause.TAKER,
+                T0 + DELAY + index,
+            )
+    finally:
+        stop.set()
+        thread.join()
+
+    assert mismatches == []
 
 
 def test_cancel_and_expiry_release_durable_reservations_once():

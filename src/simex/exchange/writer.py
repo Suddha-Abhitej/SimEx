@@ -19,6 +19,7 @@ Hooks for the next issues, deliberately not implemented here:
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Protocol
@@ -105,6 +106,7 @@ class AccountWriter:
         self.ledger = ledger
         self.halted = False
         self.halted_accounts: set[str] = set()
+        self._balance_lock = threading.RLock()
         self.applied_sequences: dict[str, int] = {}
         self.orders: dict[str, Order] = {}
         self.by_key: dict[tuple[str, str], str] = {}
@@ -140,7 +142,8 @@ class AccountWriter:
         }
 
     def balance_snapshot(self, account_id: str) -> tuple[dict[str, Decimal], int | None]:
-        return self.balance_totals(account_id), self.applied_sequences.get(account_id)
+        with self._balance_lock:
+            return self.balance_totals(account_id), self.applied_sequences.get(account_id)
 
     def restore(self, account_id: str) -> None:
         """Replace this writer's account state with the committed ledger state."""
@@ -167,11 +170,12 @@ class AccountWriter:
 
     def deposit(self, account_id: str, asset: str, amount: Decimal, event_key: str) -> None:
         self._require_running(account_id)
-        if self.ledger is not None:
-            sequence = self.ledger.record_deposit(account_id, asset, amount, event_key)
-            if sequence is not None:
-                self.applied_sequences[account_id] = sequence
-        self.accounts.deposit(account_id, asset, amount)
+        with self._balance_lock:
+            if self.ledger is not None:
+                sequence = self.ledger.record_deposit(account_id, asset, amount, event_key)
+                if sequence is not None:
+                    self.applied_sequences[account_id] = sequence
+            self.accounts.deposit(account_id, asset, amount)
 
     def _emit(self, kind: str, **fields) -> None:
         self.events.append({"seq": len(self.events) + 1, "type": kind, **fields})
@@ -294,21 +298,22 @@ class AccountWriter:
                 raise ValueError(f"fill at {price} is outside the market band edge {edge}")
         instrument = self.instruments[order.product_id]
         fill = order.record_fill(price, quantity, liquidity, cause, ts_ns, self.fees, instrument)
-        self.accounts.settle(fill, instrument)
-        if self.ledger is not None:
-            try:
-                sequence = self.ledger.record_fill(
-                    fill,
-                    instrument,
-                    order,
-                    self.accounts.reservations.get(order.order_id),
-                    self.band_prices.get(order.order_id),
-                )
-                if sequence is not None:
-                    self.applied_sequences[order.account_id] = sequence
-            except Exception:
-                self.halted = True
-                raise
+        with self._balance_lock:
+            self.accounts.settle(fill, instrument)
+            if self.ledger is not None:
+                try:
+                    sequence = self.ledger.record_fill(
+                        fill,
+                        instrument,
+                        order,
+                        self.accounts.reservations.get(order.order_id),
+                        self.band_prices.get(order.order_id),
+                    )
+                    if sequence is not None:
+                        self.applied_sequences[order.account_id] = sequence
+                except Exception:
+                    self.halted = True
+                    raise
         self._emit("fill", fill=fill.to_dict())
         if order.status is OrderStatus.FILLED:
             self._close(order)

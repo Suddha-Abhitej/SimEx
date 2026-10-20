@@ -74,6 +74,7 @@ class LedgerMetrics:
         self.double_entry_violation_active = Gauge(
             "simex_ledger_double_entry_violation_active",
             "1 while a double-entry invariant violation remains present",
+            ["transaction_id", "asset"],
             registry=self.registry,
         )
 
