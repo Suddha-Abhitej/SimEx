@@ -8,12 +8,14 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from time import monotonic_ns
 from typing import Any
 
 from simex.exchange.accounts import EXTERNAL, FEES, MARKET
 from simex.exchange.instruments import Instrument
 from simex.exchange.orders import Fill, Order, Side
 
+from .metrics import LedgerMetrics
 from .migration_runner import apply_migrations
 
 FailureHook = Callable[[str], None | Awaitable[None]]
@@ -75,6 +77,7 @@ class LedgerAdapter:
         retries: int = 3,
         backoff_seconds: float = 0.05,
         failure_hook: FailureHook | None = None,
+        metrics: LedgerMetrics | None = None,
     ) -> None:
         if retries < 1:
             raise ValueError("retries must be positive")
@@ -82,6 +85,7 @@ class LedgerAdapter:
         self.retries = retries
         self.backoff_seconds = backoff_seconds
         self.failure_hook = failure_hook
+        self.metrics = metrics
         self.halted = False
 
     async def migrate(self) -> None:
@@ -104,12 +108,16 @@ class LedgerAdapter:
                 await self._record_fill_once(fill, instrument, order, reservation, band_price)
                 return
             except LedgerIntegrityError:
+                if self.metrics is not None:
+                    self.metrics.conflicts.inc()
                 raise
             except Exception as exc:
                 last_error = exc
                 if attempt + 1 < self.retries:
                     await asyncio.sleep(self.backoff_seconds * 2**attempt)
         self.halted = True
+        if self.metrics is not None:
+            self.metrics.halts.inc()
         raise LedgerHalted("ledger failure halted fill processing") from last_error
 
     async def _record_fill_once(
@@ -136,7 +144,9 @@ class LedgerAdapter:
             fill.ts_ns,
         )
         event_key = f"fill:{fill.fill_id}"
+        transaction_started = monotonic_ns()
         async with self.connection.transaction():
+            self._observe("transaction_begin", monotonic_ns() - transaction_started)
             await self._fail("before_fill")
             row = await self.connection.fetchrow(
                 "SELECT fill_id, order_id, account_id, product_id, side, price, quantity, "
@@ -173,6 +183,7 @@ class LedgerAdapter:
                 *domain[:12],
                 event_key,
             )
+            self._observe("fill_insert", monotonic_ns() - transaction_started)
             await self._fail("after_fill")
             for _index, posting in enumerate(fill_postings(fill, instrument)):
                 await self.connection.execute(
@@ -186,6 +197,7 @@ class LedgerAdapter:
                     posting.amount,
                     posting.entry_type,
                 )
+            self._observe("postings", monotonic_ns() - transaction_started)
             await self._fail("after_postings")
             await self.connection.execute(
                 "INSERT INTO ledger_events (event_id, event_key, aggregate_type, aggregate_id, "
@@ -200,6 +212,7 @@ class LedgerAdapter:
                 fill.ts_ns,
                 json.dumps(payload),
             )
+            self._observe("event", monotonic_ns() - transaction_started)
             await self._fail("after_event")
             await self.connection.execute(
                 "INSERT INTO outbox (outbox_id, event_key, event_type, payload) "
@@ -209,10 +222,16 @@ class LedgerAdapter:
                 "fill",
                 json.dumps(payload),
             )
+            self._observe("outbox", monotonic_ns() - transaction_started)
             await self._fail("after_outbox")
             if order is not None:
                 await self._save_order(order, reservation, band_price)
         await self._fail("after_commit")
+        self._observe("commit", monotonic_ns() - transaction_started)
+
+    def _observe(self, phase: str, elapsed_ns: int) -> None:
+        if self.metrics is not None:
+            self.metrics.observe(phase, elapsed_ns)
 
     async def save_order(
         self, order: Order, reservation: Any | None = None, band_price: Decimal | None = None

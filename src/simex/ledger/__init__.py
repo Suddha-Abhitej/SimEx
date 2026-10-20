@@ -9,11 +9,13 @@ from .adapter import (
     Posting,
     fill_postings,
 )
+from .metrics import LedgerMetrics
 from .migration_runner import apply_migrations
 from .sync import SyncLedger
 
 __all__ = [
     "LedgerAdapter",
+    "LedgerMetrics",
     "AccountState",
     "LedgerHalted",
     "LedgerIntegrityError",

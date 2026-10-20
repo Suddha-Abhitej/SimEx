@@ -6,7 +6,7 @@ import asyncpg
 import pytest
 
 from simex.exchange import DEFAULT_INSTRUMENTS, Fill, FillCause, Liquidity, Side
-from simex.ledger import LedgerAdapter, LedgerHalted, LedgerIntegrityError
+from simex.ledger import LedgerAdapter, LedgerHalted, LedgerIntegrityError, LedgerMetrics
 
 
 def fill(fill_id="order-1", side=Side.BUY):
@@ -49,7 +49,8 @@ def test_fill_is_idempotent_and_conflicts_are_hard_errors():
     async def scenario():
         conn = await connection_or_skip()
         try:
-            adapter = LedgerAdapter(conn)
+            metrics = LedgerMetrics()
+            adapter = LedgerAdapter(conn, metrics=metrics)
             await adapter.migrate()
             current = fill(f"test-idempotent-{os.getpid()}-1")
             await adapter.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"])
@@ -58,6 +59,21 @@ def test_fill_is_idempotent_and_conflicts_are_hard_errors():
             changed = Fill(**{**changed.__dict__, "fee": Decimal("0.13")})
             with pytest.raises(LedgerIntegrityError):
                 await adapter.record_fill(changed, DEFAULT_INSTRUMENTS["BTC-USD"])
+            assert metrics.conflicts._value.get() == 1
+            for phase in (
+                "transaction_begin",
+                "fill_insert",
+                "postings",
+                "event",
+                "outbox",
+                "commit",
+            ):
+                assert (
+                    metrics.registry.get_sample_value(
+                        "simex_ledger_latency_seconds_count", {"phase": phase}
+                    )
+                    > 0
+                )
             assert (
                 await conn.fetchval(
                     "SELECT count(*) FROM fills WHERE fill_id = $1", current.fill_id

@@ -49,3 +49,14 @@ groups:
             A faster feed may regain an execution edge because the configured anti-cheat delay
             is below this pair's rolling p99 level2 lag. Re-measure the feed and raise
             EXCHANGE_ORDER_DELAY_MS if needed.
+      - alert: ExchangeLedgerCommitP99TooHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(simex_ledger_latency_seconds_bucket{phase="commit"}[5m]))) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ledger commit p99 is above the 50 ms budget"
+          description: >-
+            The ledger commit path is exceeding the approved 50 ms p99 budget. Check
+            simex_ledger_latency_seconds, Postgres CPU and the host before accepting more
+            order flow on the two-core deployment.
