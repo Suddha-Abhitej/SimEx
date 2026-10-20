@@ -19,3 +19,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0012](0012-order-book-service-valkey-and-audit.md) | Order book library and service, Valkey book records, and the book audit | Accepted |
 | [0013](0013-recorder-parquet-layout-exactly-once-retention.md) | Recorder: hourly zstd Parquet, exactly once, local retention | Accepted |
 | [0014](0014-order-model-and-fill-model.md) | Order model, per-account balances, and the fill model | Accepted |
+| [0015](0015-live-runner-merge-and-watermark.md) | Live exchange runner: merge by received time, release to a watermark | Accepted |

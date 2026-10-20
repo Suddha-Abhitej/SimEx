@@ -296,10 +296,13 @@ different, and it is a finding about the venue, not a defect of the simulator:
 `simex.exchange.PairEngine`, one per pair, owns its `OrderBook`, the depletion map, the resting
 orders' queue state and a `ShrinkMatcher` (`simex.exchange.attribution`, the same class the W
 measurement runs). It takes accepted orders from the account writer and reports fills and state
-changes back to it. `on_event` first does what is due by the event's `received_at_ns` (orders
-and cancels taking effect, depletion and matcher expiry) against the book as it stood, then
-applies the event; `advance` does the same for quiet periods. Orders taking effect at the same
-moment go in arrival order. Settings: `EXCHANGE_MATCH_WINDOW_MS` (W, 300; one pair with
+changes back to it. `on_event` first does what is due by the event's `received_at_ns` against
+the book as it stood, then applies the event; `advance` does the same for quiet periods. What is
+due is taken in time order: each order and cancel at its own effective time, after the depletion
+and matcher expiries due by then, so the result doesn't depend on how often `advance` is called
+(the live runner calls it at each watermark, replay at each event; ADR 0015, which corrected an
+earlier version that processed everything at the call's time). Orders taking effect at the same
+moment go in arrival order, an order before a cancel. Settings: `EXCHANGE_MATCH_WINDOW_MS` (W, 300; one pair with
 `EXCHANGE_MATCH_WINDOW_MS_<PAIR>`, e.g. `_ETH_USD`),
 `EXCHANGE_DEPLETION_MAX_AGE_SECONDS` (10), `EXCHANGE_CANCEL_ATTRIBUTION`
 (`proportional`, `pessimistic`, `optimistic`), `EXCHANGE_BOOK_CROSS` (`print`, `fill`).

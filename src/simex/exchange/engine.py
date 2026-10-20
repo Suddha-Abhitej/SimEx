@@ -171,8 +171,16 @@ class PairEngine:
         """Hand over an order the account writer accepted (PENDING). Rejected ones are ignored."""
         if order.product_id != self.product_id:
             raise ValueError(f"{order.product_id} order sent to the {self.product_id} engine")
-        if order.status is OrderStatus.PENDING and order.order_id not in self.pending:
-            self.pending.append(order.order_id)
+        if order.status is not OrderStatus.PENDING or order.order_id in self.pending:
+            return
+        if order.effective_at_ns <= self.now_ns:
+            # The engine is already past the moment the order was to take effect: applying it
+            # now would meet a later book. Live, this means the order reached the engine more
+            # than the delay plus the watermark lag after it was stamped (ADR 0015).
+            self.stats.add("rejected_on_effect:arrived_after_effective")
+            self.writer.reject_on_effect(order.order_id, "arrived_after_effective", self.now_ns)
+            return
+        self.pending.append(order.order_id)
 
     # Time ------------------------------------------------------------------------------------
 
@@ -188,33 +196,53 @@ class PairEngine:
             self.book.apply(event)
 
     def advance(self, now_ns: int) -> None:
-        """Do what is due by now_ns, against the book as it stands."""
-        self.now_ns = max(self.now_ns, now_ns)
-        now = self.now_ns
+        """Do what is due by now_ns, in time order. Each order and cancel takes effect at its
+        own effective time, after the expiries due by then, against the book as it stands
+        (every event received before that time, none after). So the result is the same
+        however often advance is called: live calls it at each watermark, replay at each
+        event."""
+        target = max(self.now_ns, now_ns)
+        while (item := self._next_due(target)) is not None:
+            when, order, is_cancel = item
+            when = max(when, self.now_ns)  # never before what has already been applied
+            self._expire(when)
+            self.now_ns = when
+            if is_cancel:
+                del self.resting[order.order_id]
+                if not order.status.terminal:
+                    self.writer.cancel_now(order.order_id, when)
+            else:
+                self.pending.remove(order.order_id)
+                self._take_effect(order, when)
+        self._expire(target)
+        self.now_ns = target
+
+    def _next_due(self, by: int) -> tuple[int, Order, bool] | None:
+        """The earliest order or cancel due by `by`: orders first come, first served (the
+        pending list is in arrival order), an order before a cancel at the same moment."""
+        best = None
+        for index, order_id in enumerate(self.pending):
+            order = self.writer.orders[order_id]
+            if order.effective_at_ns <= by:
+                key = (order.effective_at_ns, 0, index, "")
+                if best is None or key < best[0]:
+                    best = (key, order, False)
+        for order_id in self.resting:
+            order = self.writer.orders[order_id]
+            due = order.cancel_effective_at_ns
+            if due is not None and due <= by:
+                key = (due, 1, 0, order_id)
+                if best is None or key < best[0]:
+                    best = (key, order, True)
+        return None if best is None else (best[0][0], best[1], best[2])
+
+    def _expire(self, now: int) -> None:
         for key, entry in sorted(self.depletion.items()):
             if now - entry.since_ns > self.settings.depletion_max_age_ns:
                 del self.depletion[key]
                 self.stats.add("depletion_expired:age")
         for cancel in self.matcher.expire(now):
             self._attribute_cancel(cancel)
-        # Stable sort over the pending list, which is in arrival order: orders taking effect at
-        # the same moment go first come, first served.
-        due = sorted(
-            (o for o in (self.writer.orders[i] for i in self.pending) if o.effective_at_ns <= now),
-            key=lambda o: o.effective_at_ns,
-        )
-        for order in due:
-            self.pending.remove(order.order_id)
-            self._take_effect(order, now)
-        for order_id in sorted(
-            self.resting,
-            key=lambda i: (self.writer.orders[i].cancel_effective_at_ns or 0, i),
-        ):
-            order = self.writer.orders[order_id]
-            if order.cancel_effective_at_ns is not None and order.cancel_effective_at_ns <= now:
-                del self.resting[order_id]
-                if not order.status.terminal:
-                    self.writer.cancel_now(order_id, now)
 
     # Taking effect ---------------------------------------------------------------------------
 

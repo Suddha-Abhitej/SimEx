@@ -14,6 +14,7 @@ And the same stream replayed into a fresh engine gives byte-identical events.
 """
 
 import json
+import random
 from decimal import Decimal as D
 
 from hypothesis import HealthCheck, given, settings
@@ -107,6 +108,33 @@ def snapshot_levels():
     return bids, asks
 
 
+def outcome(writer):
+    """What the market did to the orders, independent of when submissions interleaved with
+    effects: every fill in order per pair, every order's final record, every balance. A
+    cancel request is checked against the order's state when it is made (wall clock), so
+    whether it is recorded on an order that has, in market time, already filled depends on
+    how far the market clock had got; the request fields are left out. The fill it can't
+    prevent is in."""
+    # Per pair, in order: pairs are independent (funds are reserved at submission, so a fill
+    # on one can't change another's), and live releases each pair's batch in turn.
+    fills = sorted(
+        (e["fill"] for e in writer.events if e["type"] == "fill"), key=lambda f: f["product_id"]
+    )
+    request_fields = ("cancel_requested_at_ns", "cancel_effective_at_ns")
+    orders = sorted(
+        (
+            {k: v for k, v in o.to_dict().items() if k not in request_fields}
+            for o in writer.orders.values()
+        ),
+        key=lambda o: o["order_id"],
+    )
+    balances = {
+        account: {asset: [str(b.available), str(b.reserved)] for asset, b in sorted(assets.items())}
+        for account, assets in sorted(writer.accounts.balances.items())
+    }
+    return json.dumps([fills, orders, balances], sort_keys=True)
+
+
 class Run:
     """A market and orders driven through one engine, with every fill checked in context."""
 
@@ -137,7 +165,9 @@ class Run:
             self.now,
         )
 
-    def step(self, s, dt):
+    def step(self, s, dt, extra=None):
+        if extra is not None and dt:  # an advance at a time in between, as live does
+            self.engine.advance(self.now + extra.randint(0, dt) * MS)
         self.now += dt * MS
         kind = s[0]
         if kind == "order":
@@ -223,6 +253,9 @@ class Run:
     def events(self):
         return json.dumps(self.writer.events, sort_keys=True)
 
+    def outcome(self):
+        return outcome(self.writer)
+
 
 @settings(max_examples=250, deadline=None, suppress_health_check=[HealthCheck.too_slow])
 @given(steps)
@@ -246,4 +279,21 @@ def test_replay_is_byte_identical(seq):
             run.step(s, dt)
         run.engine.advance(run.now + 10**9)
         outputs.append(run.events())
+    assert outputs[0] == outputs[1]
+
+
+@settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(steps, st.integers(0, 10**6))
+def test_how_often_advance_runs_changes_nothing(seq, seed):
+    """Live advances at each watermark, replay at each event: the same market and orders give
+    the same fills, final orders and balances either way. (The event log can interleave a
+    submission with an effect differently: submissions follow the wall clock.)"""
+    rng = random.Random(seed)
+    outputs = []
+    for extra in (None, rng):
+        run = Run()
+        for s, dt in seq:
+            run.step(s, dt, extra)
+        run.engine.advance(run.now + 10**9)
+        outputs.append(run.outcome())
     assert outputs[0] == outputs[1]

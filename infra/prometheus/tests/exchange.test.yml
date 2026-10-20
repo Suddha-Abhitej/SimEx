@@ -1,0 +1,70 @@
+# promtool test rules infra/prometheus/tests/exchange.test.yml (CI runs it; synthetic series)
+rule_files:
+  - ../rules/exchange.yml
+evaluation_interval: 1m
+tests:
+  # The measured baseline: a burst of 13 in one go (the 18:09 host stall) and a few more
+  # later. Never an alert.
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_late_events_total{product_id="BTC-USD",channel="level2"}'
+        values: '0x10 13x10 15x20'
+      - series: 'simex_exchange_late_events_total{product_id="ETH-USD",channel="trades"}'
+        values: '0x20 2x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ExchangeLateRecords
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ExchangeLateRecords
+        exp_alerts: []
+
+  # Five a minute from 10m: the hold-back is too short for this host. An alert once more than
+  # 20 have come in 10 minutes, gone 10 minutes after they stop.
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_late_events_total{product_id="BTC-USD",channel="level2"}'
+        values: '0x10 5+5x9 50x20'
+    alert_rule_test:
+      - eval_time: 13m
+        alertname: ExchangeLateRecords
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ExchangeLateRecords
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "30 records reached the engine late in 10 minutes"
+              description: "Records arrived after the watermark had passed their received time. Check simex_exchange_delivery_seconds against EXCHANGE_MERGE_HOLDBACK_MS and raise the hold-back; the runner's log names each late record and its type."
+      - eval_time: 32m
+        alertname: ExchangeLateRecords
+        exp_alerts: []
+
+  # The watermark falls behind from 11m (60 s, then a minute a minute): the alert fires at 16m.
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_watermark_lag_seconds{product_id="BTC-USD"}'
+        values: '0.1x10 60+60x20'
+      - series: 'simex_exchange_watermark_lag_seconds{product_id="ETH-USD"}'
+        values: '0.1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: ExchangeWatermarkStalled
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: ExchangeWatermarkStalled
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "An engine's watermark is 360 s behind the wall clock"
+              description: "The runner isn't releasing records: it is stuck or far behind md.level2 or md.trades. Orders would wait; check the runner's log and Kafka."
+
+  # Caught up, with the hold-back's usual lag: never an alert.
+  - interval: 1m
+    input_series:
+      - series: 'simex_exchange_watermark_lag_seconds{product_id="BTC-USD"}'
+        values: '0.12x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: ExchangeWatermarkStalled
+        exp_alerts: []
