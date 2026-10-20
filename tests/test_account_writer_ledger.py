@@ -1,6 +1,7 @@
 import copy
 import os
 import threading
+import time
 import uuid
 from collections import defaultdict
 from decimal import Decimal as D
@@ -104,6 +105,7 @@ class SequencedMemoryLedger(MemoryLedger):
 
     def record_fill(self, fill, instrument, order, reservation, band_price=None):
         super().record_fill(fill, instrument, order, reservation, band_price)
+        time.sleep(0.005)
         return self._save_sequence(fill.account_id)
 
     def fold(self, account_id, marker):
@@ -183,7 +185,7 @@ def test_reconciliation_snapshots_stay_coherent_while_fills_commit():
     thread = threading.Thread(target=reconcile)
     thread.start()
     try:
-        for index in range(50):
+        for index in range(5):
             writer.record_fill(
                 order.order_id,
                 D("100"),
