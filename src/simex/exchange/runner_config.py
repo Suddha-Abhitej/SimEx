@@ -38,6 +38,8 @@ class RunnerSettings:
     ledger_dsn: str | None = None
     account_id: str = "owner"
     initial_usd: Decimal = Decimal("100000")
+    mcp_port: int | None = None
+    reconciliation_interval_seconds: float = 60.0
 
     @property
     def lookback_seconds(self) -> float:
@@ -83,4 +85,10 @@ class RunnerSettings:
             ledger_dsn=env.get("EXCHANGE_LEDGER_DSN") or None,
             account_id=get("EXCHANGE_ACCOUNT_ID", d.account_id),
             initial_usd=Decimal(get("EXCHANGE_INITIAL_USD", d.initial_usd)),
+            mcp_port=(
+                int(env["EXCHANGE_MCP_PORT"]) if env.get("EXCHANGE_MCP_PORT", "").strip() else None
+            ),
+            reconciliation_interval_seconds=float(
+                get("EXCHANGE_RECONCILIATION_INTERVAL_SECONDS", d.reconciliation_interval_seconds)
+            ),
         )

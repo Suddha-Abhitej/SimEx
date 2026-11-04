@@ -329,11 +329,15 @@ def test_the_holdback_setting():
             "EXCHANGE_LEDGER_DSN": "postgresql://ledger",
             "EXCHANGE_ACCOUNT_ID": "alice",
             "EXCHANGE_INITIAL_USD": "125.50",
+            "EXCHANGE_MCP_PORT": "9876",
+            "EXCHANGE_RECONCILIATION_INTERVAL_SECONDS": "7",
         }
     )
     assert settings.ledger_dsn == "postgresql://ledger"
     assert settings.account_id == "alice"
     assert settings.initial_usd == D("125.50")
+    assert settings.mcp_port == 9876
+    assert settings.reconciliation_interval_seconds == 7
     with pytest.raises(ValueError):
         RunnerSettings.from_env({"EXCHANGE_ORDER_DELAY_MS": "-1"})
 

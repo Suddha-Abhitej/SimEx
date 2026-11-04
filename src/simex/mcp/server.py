@@ -211,6 +211,11 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
     return server
 
 
+async def run_server_async(tools: ExchangeTools, *, port: int = 8765) -> None:
+    """Run the private HTTP transport until the owning task is cancelled."""
+    await create_server(tools, port=port).run_streamable_http_async()
+
+
 def run_server(tools: ExchangeTools, *, port: int = 8765) -> None:
     """Run the private HTTP transport; the caller owns exchange construction and lifecycle."""
     create_server(tools, port=port).run(transport="streamable-http")
