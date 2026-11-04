@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -211,9 +212,22 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
     return server
 
 
-async def run_server_async(tools: ExchangeTools, *, port: int = 8765) -> None:
+async def run_server_async(
+    tools: ExchangeTools,
+    *,
+    port: int = 8765,
+    bind_retries: int = 5,
+    retry_delay: float = 0.1,
+) -> None:
     """Run the private HTTP transport until the owning task is cancelled."""
-    await create_server(tools, port=port).run_streamable_http_async()
+    for attempt in range(bind_retries):
+        try:
+            await create_server(tools, port=port).run_streamable_http_async()
+            return
+        except OSError:
+            if attempt + 1 == bind_retries:
+                raise
+            await asyncio.sleep(retry_delay)
 
 
 def run_server(tools: ExchangeTools, *, port: int = 8765) -> None:

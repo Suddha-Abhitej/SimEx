@@ -1,6 +1,6 @@
 # 0018. Local MCP order entry
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-04
 
 ## Context
@@ -31,9 +31,18 @@ identical payload returns the existing order from `AccountWriter`.
 The demo is a local private run. Its recording is written below `data/`, which is gitignored and
 must not be committed because it contains Gemini-derived prices and results.
 
+The MCP server and reconciliation job run in the same supervised runtime group as the exchange
+runner. A Kafka outage tears down the whole group, including the ledger connection, so the MCP
+endpoint disappears until a new group has restored the account and rebuilt all projections.
+Reconciliation is registered against that new writer, never an old runner. The MCP HTTP bind is
+retried briefly after teardown to tolerate socket release and immediate port reuse; the server
+still binds only to localhost. A bind failure after retries fails the group and therefore also
+stops the runner and reconciliation job.
+
 ## Consequences
 
 The MCP surface is deliberately narrow and private, and model input cannot exceed the limits
 provided by the host. A caller must supply a live exchange runner and explicit risk limits, so the
 server is not a standalone public service. Authentication beyond localhost binding is deferred to
-the API work in #15.
+the API work in #15. The group lifecycle adds restart latency and intentionally makes order entry
+unavailable during recovery from a Kafka outage.

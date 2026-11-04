@@ -18,15 +18,12 @@ from prometheus_client import start_http_server
 from simex.ingest.backoff import Backoff
 from simex.ledger import (
     LedgerMetrics,
-    PostgresReconciliationStore,
-    ReconciliationJob,
-    SyncLedger,
 )
-from simex.mcp import ExchangeTools, RiskLimits, run_server_async
+from simex.mcp import RiskLimits
 
-from .runner import ExchangeRunner
 from .runner_config import RunnerSettings
 from .runner_metrics import RunnerMetrics
+from .runtime import LiveRuntimeGroup
 from .source import KafkaMarketSource
 
 log = logging.getLogger("simex.exchange")
@@ -65,59 +62,20 @@ async def main() -> None:
             )
         return RiskLimits(max_quantity, max_notional)
 
-    async def run_group() -> None:
-        ledger = None
-        source = KafkaMarketSource(
-            settings.kafka_bootstrap_servers,
-            settings.topics,
-            fetch_max_wait_ms=settings.fetch_max_wait_ms,
-        )
-        reconciliation_store = None
-        tasks = []
-        try:
-            if settings.ledger_dsn is not None:
-                ledger = SyncLedger(settings.ledger_dsn, metrics=ledger_metrics)
-                ledger.migrate()
-            runner = ExchangeRunner(settings, source, metrics, ledger=ledger)
-            if ledger is not None:
-                reconciliation_store = PostgresReconciliationStore(settings.ledger_dsn)
-                reconciliation = ReconciliationJob(
-                    reconciliation_store,
-                    ledger_metrics,
-                    interval_seconds=settings.reconciliation_interval_seconds,
-                )
-                reconciliation.register_writer(settings.account_id, runner.writer)
-            tasks.append(asyncio.create_task(runner.run(), name="exchange-runner"))
-            if ledger is not None:
-                tasks.append(
-                    asyncio.create_task(reconciliation.run_forever(), name="reconciliation")
-                )
-            if ledger is not None and settings.mcp_port is not None:
-                tools = ExchangeTools(
-                    settings.account_id, runner.writer, runner.engines, risk_limits()
-                )
-                tasks.append(
-                    asyncio.create_task(
-                        run_server_async(tools, port=settings.mcp_port),
-                        name="mcp-server",
-                    )
-                )
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-            for task in done:
-                task.result()
-            await asyncio.gather(*pending)
-        finally:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            if reconciliation_store is not None:
-                reconciliation_store.close()
-            if ledger is not None:
-                ledger.close()
-
     while True:
         try:
-            await run_group()
+            group = LiveRuntimeGroup(
+                settings,
+                metrics,
+                lambda: KafkaMarketSource(
+                    settings.kafka_bootstrap_servers,
+                    settings.topics,
+                    fetch_max_wait_ms=settings.fetch_max_wait_ms,
+                ),
+                ledger_metrics=ledger_metrics,
+                risk_limits=risk_limits(),
+            )
+            await group.run()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # Kafka down or a topic missing: start over from a snapshot
