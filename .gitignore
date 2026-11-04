@@ -36,3 +36,8 @@ node_modules/
 .idea/
 .vscode/
 .DS_Store
+
+# Probe and measurement output
+book-*.txt
+fill-window.txt
+*.key
