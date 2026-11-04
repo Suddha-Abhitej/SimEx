@@ -4,6 +4,7 @@ import asyncio
 import bisect
 import json
 import random
+import uuid
 from decimal import Decimal as D
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from test_exchange_engine_properties import outcome
+from test_ledger import connection_or_skip
 
 from simex.exchange import DEFAULT_INSTRUMENTS, AccountWriter, FeeSchedule
 from simex.exchange.engine import EngineSettings, PairEngine
@@ -27,7 +29,7 @@ from simex.exchange.runner_metrics import RunnerMetrics
 from simex.exchange.source import Fetched, Record
 from simex.ingest.envelope import build_envelope, topics_for
 from simex.ingest.venue import LEVEL2, TRADES, Item
-from simex.ledger import AccountState, LedgerMetrics, ReconciliationJob
+from simex.ledger import AccountState, LedgerAdapter, LedgerMetrics, ReconciliationJob, SyncLedger
 from simex.marketdata import decode
 
 TOPICS = topics_for("gemini")
@@ -386,6 +388,48 @@ def test_ledger_seed_is_not_credited_again_after_restore():
     reconciliation = ReconciliationJob(ledger, LedgerMetrics())
     reconciliation.register_writer("alice", second.writer)
     assert reconciliation.run_once() == ()
+
+
+def test_postgres_ledger_seed_is_not_credited_again_after_restore():
+    async def scenario():
+        probe = await connection_or_skip()
+        account_id = f"runner-seed-{uuid.uuid4().hex}"
+        amount = D("125")
+        adapter = LedgerAdapter(probe)
+        await adapter.record_deposit(account_id, "USD", amount, f"seed:{account_id}:USD:v1")
+        state = await adapter.load_account(account_id)
+        assert state.latest_sequence is not None
+        ledger = SyncLedger(probe.dsn)
+        settings = RunnerSettings(
+            pairs=PAIRS,
+            digest_path="",
+            account_id=account_id,
+            initial_usd=amount,
+        )
+        try:
+            first = ExchangeRunner(
+                settings,
+                FakeKafka(market(13, 1), random.Random(13), 0),
+                RunnerMetrics(),
+                ledger=ledger,
+            )
+            await first.start()
+            second = ExchangeRunner(
+                settings,
+                FakeKafka(market(14, 1), random.Random(14), 0),
+                RunnerMetrics(),
+                ledger=ledger,
+            )
+            await second.start()
+            projection, marker = second.writer.balance_snapshot(account_id)
+            assert projection == {"USD": amount}
+            assert marker == state.latest_sequence
+            assert await adapter.fold_balances(account_id, marker) == projection
+        finally:
+            ledger.close()
+            await probe.close()
+
+    asyncio.run(scenario())
 
 
 def runner_on(kafka, **settings):
