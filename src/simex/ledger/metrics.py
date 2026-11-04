@@ -60,6 +60,7 @@ class LedgerMetrics:
             "Unix timestamp of the last completed ledger reconciliation",
             registry=self.registry,
         )
+        self.reconciliation_last_success_timestamp_seconds.set(float("nan"))
         self.reconciliation_overrides = Gauge(
             "simex_ledger_reconciliation_override_active",
             "1 while an audited reconciliation override is active",

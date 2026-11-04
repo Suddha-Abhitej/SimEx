@@ -15,6 +15,7 @@ from decimal import Decimal
 
 from prometheus_client import start_http_server
 
+from simex.env import load_environment
 from simex.ingest.backoff import Backoff
 from simex.ledger import (
     LedgerMetrics,
@@ -30,6 +31,7 @@ log = logging.getLogger("simex.exchange")
 
 
 async def main() -> None:
+    load_environment(log)
     settings = RunnerSettings.from_env()
     metrics = RunnerMetrics()
     ledger_metrics = (
@@ -78,9 +80,9 @@ async def main() -> None:
             await group.run()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # Kafka down or a topic missing: start over from a snapshot
+        except Exception:  # Kafka down or a topic missing: start over from a snapshot
             delay = backoff.next_delay()
-            log.warning("exchange runner stopped (%r); starting over in %.1fs", exc, delay)
+            log.exception("exchange runner stopped; starting over in %.1fs", delay)
             await asyncio.sleep(delay)
 
 

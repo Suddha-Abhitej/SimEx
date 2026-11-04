@@ -15,6 +15,7 @@ import signal
 
 from prometheus_client import start_http_server
 
+from simex.env import load_environment
 from simex.ingest.backoff import Backoff
 
 from .config import TOPICS, RecorderSettings
@@ -26,6 +27,7 @@ log = logging.getLogger("simex.recorder")
 
 
 async def main() -> None:
+    load_environment(log)
     settings = RecorderSettings.from_env()
     metrics = RecorderMetrics()
     start_http_server(settings.metrics_port, registry=metrics.registry)

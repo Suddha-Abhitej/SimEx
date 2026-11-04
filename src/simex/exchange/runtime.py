@@ -43,6 +43,7 @@ class LiveRuntimeGroup:
         self.runner_factory = runner_factory
         self.store_factory = store_factory
         self.ledger: SyncLedger | None = None
+        self.source: Any | None = None
         self.runner: ExchangeRunner | None = None
         self.reconciliation: ReconciliationJob | None = None
         self.tools: ExchangeTools | None = None
@@ -50,7 +51,7 @@ class LiveRuntimeGroup:
         self.tasks: list[asyncio.Task[Any]] = []
 
     async def run(self) -> None:
-        source = self.source_factory()
+        self.source = self.source_factory()
         try:
             if self.settings.mcp_port is not None and self.risk_limits is None:
                 suffixes = self.settings.pairs
@@ -64,7 +65,7 @@ class LiveRuntimeGroup:
                 self.ledger = SyncLedger(self.settings.ledger_dsn, metrics=self.ledger_metrics)
                 self.ledger.migrate()
             self.runner = self.runner_factory(
-                self.settings, source, self.metrics, ledger=self.ledger
+                self.settings, self.source, self.metrics, ledger=self.ledger
             )
             if self.ledger is not None:
                 self.store = self.store_factory(self.settings.ledger_dsn)
@@ -105,9 +106,16 @@ class LiveRuntimeGroup:
         if self.tasks:
             await asyncio.gather(*self.tasks, return_exceptions=True)
         self.tasks.clear()
-        if self.store is not None:
-            self.store.close()
-            self.store = None
-        if self.ledger is not None:
-            self.ledger.close()
-            self.ledger = None
+        try:
+            if self.source is not None:
+                await self.source.stop()
+        finally:
+            self.source = None
+            try:
+                if self.store is not None:
+                    self.store.close()
+                    self.store = None
+            finally:
+                if self.ledger is not None:
+                    self.ledger.close()
+                    self.ledger = None

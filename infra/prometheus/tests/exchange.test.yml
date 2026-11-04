@@ -169,3 +169,20 @@ tests:
             exp_annotations:
               summary: "Ledger reconciliation is stale"
               description: "No successful ledger reconciliation has completed within two configured intervals. Check the reconciliation task, Postgres and the ledger metrics endpoint."
+
+  # The gauge is NaN before the first successful scan, so startup alone does not alert.
+  - interval: 1m
+    input_series:
+      - series: 'simex_ledger_reconciliation_last_success_timestamp_seconds'
+        values: 'NaN NaN 100 100 100 100 100'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ExchangeLedgerReconciliationStale
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ExchangeLedgerReconciliationStale
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Ledger reconciliation is stale"
+              description: "No successful ledger reconciliation has completed within two configured intervals. Check the reconciliation task, Postgres and the ledger metrics endpoint."
