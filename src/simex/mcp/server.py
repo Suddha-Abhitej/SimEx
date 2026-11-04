@@ -120,14 +120,14 @@ class ExchangeTools:
             if price is None:
                 decision = self.writer.gate.check(order_request.product_id, self.clock_ns())
                 if not decision.open:
-                    price = None
+                    return {"ok": False, "reason": "no_band_price"}
                 else:
                     best = (
                         decision.best_ask if order_request.side is Side.BUY else decision.best_bid
                     )
-                    price = (
-                        None if best is None else band_price(best, order_request.side, instrument)
-                    )
+                    if best is None:
+                        return {"ok": False, "reason": "no_band_price"}
+                    price = band_price(best, order_request.side, instrument)
         except (KeyError, TypeError, ValueError, OrderError):
             return {"ok": False, "reason": "bad_order"}
         if not quantity.is_finite() or (price is not None and not price.is_finite()):
@@ -151,7 +151,14 @@ class ExchangeTools:
                 "reason": order.reject_reason or "order_rejected",
                 "order": _json_value(order.to_dict()),
             }
-        self.engines[order.product_id].submit(order)
+        try:
+            self.engines[order.product_id].submit(order)
+        except Exception:
+            return {
+                "ok": False,
+                "reason": "engine_submit_failed",
+                "order_id": order.order_id,
+            }
         return {"ok": True, "order": _json_value(order.to_dict())}
 
     def portfolio(self) -> dict[str, Any]:
