@@ -114,3 +114,11 @@ job. This ADR is therefore **Accepted**.
 The ledger survives process restart and replay without duplicate fills and supports SQL
 reconciliation. It costs synchronous database latency on the fill path and requires explicit
 halt/recovery operations when Postgres or the ledger becomes unavailable.
+
+The live exchange runner applies migrations explicitly at startup, then restores the configured
+account before starting market-data processing. If `EXCHANGE_LEDGER_DSN` is unset, it deliberately
+uses the existing in-memory writer and logs that fills are not being persisted; this fallback is
+for development and compatibility, not durable live operation. The runner currently does not
+start the reconciliation job, so
+`simex_ledger_reconciliation_last_success_timestamp_seconds` has no series until reconciliation
+startup and shutdown are wired in a later change; the staleness alert therefore remains inert.

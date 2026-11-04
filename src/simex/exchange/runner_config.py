@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 
 DEFAULT_PAIRS = ("BTC-USD", "ETH-USD", "SOL-USD")
 
@@ -34,6 +35,9 @@ class RunnerSettings:
     lag_baseline_minutes: float = 10.0
     # Per pair and UTC hour, the order the runner released records in (for the replay check).
     digest_path: str = "data/exchange/merge-digests.jsonl"
+    ledger_dsn: str | None = None
+    account_id: str = "owner"
+    initial_usd: Decimal = Decimal("100000")
 
     @property
     def lookback_seconds(self) -> float:
@@ -76,4 +80,7 @@ class RunnerSettings:
             lag_baseline_minutes=float(
                 get("EXCHANGE_LAG_BASELINE_MINUTES", d.lag_baseline_minutes)
             ),
+            ledger_dsn=env.get("EXCHANGE_LEDGER_DSN") or None,
+            account_id=get("EXCHANGE_ACCOUNT_ID", d.account_id),
+            initial_usd=Decimal(get("EXCHANGE_INITIAL_USD", d.initial_usd)),
         )
