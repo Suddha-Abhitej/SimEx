@@ -169,3 +169,22 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
         await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
+
+
+def test_mcp_requires_environment_risk_limits():
+    settings = RunnerSettings(
+        pairs=("BTC-USD",),
+        ledger_dsn=None,
+        mcp_port=8765,
+    )
+    group = LiveRuntimeGroup(settings, RunnerMetrics(), lambda: object())
+
+    try:
+        asyncio.run(group.run())
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("missing MCP risk limits were accepted")
+
+    assert "EXCHANGE_MCP_MAX_QUANTITY_BTC_USD" in message
+    assert "EXCHANGE_MCP_MAX_NOTIONAL_BTC_USD" in message

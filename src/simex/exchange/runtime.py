@@ -52,6 +52,14 @@ class LiveRuntimeGroup:
     async def run(self) -> None:
         source = self.source_factory()
         try:
+            if self.settings.mcp_port is not None and self.risk_limits is None:
+                suffixes = self.settings.pairs
+                variables = ", ".join(
+                    f"EXCHANGE_MCP_MAX_{kind}_{product.replace('-', '_')}"
+                    for product in suffixes
+                    for kind in ("QUANTITY", "NOTIONAL")
+                )
+                raise ValueError(f"EXCHANGE_MCP_PORT requires risk limits; set {variables}")
             if self.settings.ledger_dsn is not None:
                 self.ledger = SyncLedger(self.settings.ledger_dsn, metrics=self.ledger_metrics)
                 self.ledger.migrate()
