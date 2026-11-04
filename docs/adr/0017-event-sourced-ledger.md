@@ -1,6 +1,6 @@
 # 0017. Event-sourced ledger and durable fills
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
 - **Amends:** [0014](0014-order-model-and-fill-model.md) for the explicit `_external`
   counterparty.
@@ -105,10 +105,9 @@ The reconciliation write connection is a second writer to `ledger_events`; this 
 override event keys are unique and idempotent, but it is an explicit exception to the otherwise
 single-writer wording for ledger mutations.
 
-This ADR moves to **Accepted** when the three approved ledger PRs are reviewed and merged:
-the schema/adapter foundation, account-writer and restart recovery integration, and the
-projection/reconciliation job. Until then, it remains Proposed so the complete ledger contract
-can still be reviewed without implying that the later projection and recovery pieces exist.
+The three approved ledger PRs are now reviewed and merged in `main`: the schema/adapter
+foundation, account-writer and restart recovery integration, and the projection/reconciliation
+job. This ADR is therefore **Accepted**.
 
 ## Consequences
 
