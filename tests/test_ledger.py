@@ -16,6 +16,7 @@ from simex.ledger import (
     LedgerMetrics,
     SyncLedger,
 )
+from simex.ledger.migration_runner import apply_migrations
 
 
 def fill(fill_id="order-1", side=Side.BUY):
@@ -43,11 +44,81 @@ async def connection_or_skip():
             raise RuntimeError("SIMEX_TEST_POSTGRES_DSN is required in this test job")
         pytest.skip("set SIMEX_TEST_POSTGRES_DSN for ledger integration tests")
     try:
-        return await asyncpg.connect(dsn)
+        connection = await asyncpg.connect(dsn)
     except Exception as exc:
         if os.environ.get("SIMEX_REQUIRE_POSTGRES_TESTS") == "1":
             raise RuntimeError(f"Postgres unavailable: {exc}") from exc
         pytest.skip(f"Postgres unavailable: {exc}")
+
+    schema = f"ledger_test_{uuid.uuid4().hex}"
+    try:
+        await connection.execute(f'CREATE SCHEMA "{schema}"')
+        await connection.execute(f'SET search_path TO "{schema}"')
+        await apply_migrations(connection)
+        expected = {
+            "account_reservations",
+            "fills",
+            "ledger_events",
+            "ledger_postings",
+            "ledger_transactions",
+            "orders",
+            "outbox",
+            "reconciliation_state",
+            "reconciliation_violations",
+            "schema_migrations",
+        }
+        assert expected <= {
+            row["tablename"]
+            for row in await connection.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname = $1", schema
+            )
+        }
+        for table in ("ledger_postings", "reconciliation_state"):
+            assert (
+                await connection.fetchval(
+                    "SELECT n.nspname || '.' || c.relname "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE c.oid = to_regclass($1)",
+                    f"{schema}.{table}",
+                )
+                == f"{schema}.{table}"
+            )
+        assert (
+            await connection.fetchval(
+                "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' "
+                "AND tablename = ANY($1::text[])",
+                list(expected),
+            )
+            == 0
+        )
+        return IsolatedConnection(connection, dsn, schema)
+    except Exception:
+        await connection.close()
+        admin = await asyncpg.connect(dsn)
+        try:
+            await admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        finally:
+            await admin.close()
+        raise
+
+
+class IsolatedConnection:
+    def __init__(self, connection, dsn, schema):
+        self._connection = connection
+        self.dsn = f"{dsn}{'&' if '?' in dsn else '?'}options=-csearch_path%3D{schema}"
+        self._dsn = dsn
+        self._schema = schema
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+    async def close(self):
+        await self._connection.close()
+        admin = await asyncpg.connect(self._dsn)
+        try:
+            await admin.execute(f'DROP SCHEMA IF EXISTS "{self._schema}" CASCADE')
+        finally:
+            await admin.close()
 
 
 def run(coro):
@@ -104,9 +175,8 @@ def test_sync_ledger_timeout_halts_when_cancellation_does_not_settle():
 
 def test_sync_ledger_timeout_retry_is_idempotent_after_commit():
     async def scenario():
-        dsn = os.environ.get("SIMEX_TEST_POSTGRES_DSN")
         probe = await connection_or_skip()
-        await probe.close()
+        dsn = probe.dsn
         ledger = SyncLedger(
             dsn,
             hard_timeout_seconds=0.01,
@@ -150,6 +220,7 @@ def test_sync_ledger_timeout_retry_is_idempotent_after_commit():
                 await conn.close()
         finally:
             ledger.close()
+            await probe.close()
 
     run(scenario())
 

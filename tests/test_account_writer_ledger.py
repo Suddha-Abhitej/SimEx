@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import os
 import threading
@@ -6,6 +7,7 @@ import uuid
 from collections import defaultdict
 from decimal import Decimal as D
 
+import asyncpg
 import pytest
 
 from simex.exchange import (
@@ -19,6 +21,7 @@ from simex.exchange import (
 from simex.exchange.engine import EngineSettings, PairEngine
 from simex.exchange.orders import FillCause
 from simex.ledger import AccountState, SyncLedger, fill_postings
+from simex.ledger.migration_runner import apply_migrations
 
 P = "BTC-USD"
 T0 = 1_792_036_800_000_000_000
@@ -287,9 +290,29 @@ def _trade(ts, size):
 
 
 def test_postgres_restart_restores_state():
-    dsn = os.environ.get("SIMEX_TEST_POSTGRES_DSN")
-    if not dsn:
+    base_dsn = os.environ.get("SIMEX_TEST_POSTGRES_DSN")
+    if not base_dsn:
         pytest.skip("set SIMEX_TEST_POSTGRES_DSN for ledger integration tests")
+    schema = f"ledger_restart_{uuid.uuid4().hex}"
+
+    async def setup():
+        connection = await asyncpg.connect(base_dsn)
+        try:
+            await connection.execute(f'CREATE SCHEMA "{schema}"')
+            await connection.execute(f'SET search_path TO "{schema}"')
+            await apply_migrations(connection)
+        finally:
+            await connection.close()
+
+    async def cleanup():
+        connection = await asyncpg.connect(base_dsn)
+        try:
+            await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        finally:
+            await connection.close()
+
+    asyncio.run(setup())
+    dsn = f"{base_dsn}{'&' if '?' in base_dsn else '?'}options=-csearch_path%3D{schema}"
     ledger = SyncLedger(dsn)
     account = f"restart-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     try:
@@ -303,3 +326,4 @@ def test_postgres_restart_restores_state():
         assert restarted.accounts.balance(account, "USD").reserved == D("10.12")
     finally:
         ledger.close()
+        asyncio.run(cleanup())

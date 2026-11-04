@@ -3,7 +3,6 @@ import os
 import uuid
 from collections import defaultdict
 from decimal import Decimal
-from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 import pytest
@@ -246,10 +245,20 @@ def postgres_dsn():
 
 async def _postgres_setup(dsn, schema):
     connection = await asyncpg.connect(dsn)
-    await connection.execute(f'CREATE SCHEMA "{schema}"')
     await connection.execute(f'SET search_path TO "{schema}"')
     await apply_migrations(connection)
-    expected = {"ledger_postings", "reconciliation_state"}
+    expected = {
+        "account_reservations",
+        "fills",
+        "ledger_events",
+        "ledger_postings",
+        "ledger_transactions",
+        "orders",
+        "outbox",
+        "reconciliation_state",
+        "reconciliation_violations",
+        "schema_migrations",
+    }
     resolved = {
         row["tablename"]
         for row in await connection.fetch(
@@ -276,20 +285,19 @@ async def _postgres_setup(dsn, schema):
     await connection.close()
 
 
-def _database_dsn(dsn, database):
-    parts = urlsplit(dsn)
-    return urlunsplit((parts.scheme, parts.netloc, f"/{database}", parts.query, parts.fragment))
+def _schema_dsn(dsn, schema):
+    return f"{dsn}{'&' if '?' in dsn else '?'}options=-csearch_path%3D{schema}"
 
 
-async def _create_database(dsn, database):
+async def _create_schema(dsn, schema):
     connection = await asyncpg.connect(dsn)
-    await connection.execute(f'CREATE DATABASE "{database}"')
+    await connection.execute(f'CREATE SCHEMA "{schema}"')
     await connection.close()
 
 
-async def _drop_database(dsn, database):
+async def _drop_schema(dsn, schema):
     connection = await asyncpg.connect(dsn)
-    await connection.execute(f'DROP DATABASE IF EXISTS "{database}" WITH (FORCE)')
+    await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
     await connection.close()
 
 
@@ -353,52 +361,49 @@ def test_postgres_fold_matches_writer_projection_and_replay_is_exactly_once(data
     postgres_dsn_value = postgres_dsn()
     example_id = uuid.uuid4().hex
     schema = f"ledger_{example_id}"
-    database = f"simex_prop_{example_id}"
-    asyncio.run(_create_database(postgres_dsn_value, database))
-    dsn = _database_dsn(postgres_dsn_value, database)
-    asyncio.run(_postgres_setup(dsn, schema))
-    if "?" in dsn:
-        dsn += f"&options=-csearch_path%3D{schema}"
-    else:
-        dsn += f"?options=-csearch_path%3D{schema}"
-    ledger = PropertySyncLedger(dsn)
-    fills = data.draw(fill_sequences(example_id))
-    writer = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), DELAY, ledger=ledger)
-    snapshots = []
+    asyncio.run(_create_schema(postgres_dsn_value, schema))
     try:
-        writer.deposit(f"{example_id}-account", "USD", Decimal("1000000"), "deposit")
-        for item in fills:
-            fill = _make_fill(item)
-            order = writer.submit(
-                fill.account_id,
-                _payload(
-                    DEFAULT_INSTRUMENTS["BTC-USD"],
-                    Side.BUY,
-                    "limit",
-                    fill.quantity,
+        dsn = _schema_dsn(postgres_dsn_value, schema)
+        asyncio.run(_postgres_setup(dsn, schema))
+        ledger = PropertySyncLedger(dsn)
+        fills = data.draw(fill_sequences(example_id))
+        writer = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), DELAY, ledger=ledger)
+        snapshots = []
+        try:
+            writer.deposit(f"{example_id}-account", "USD", Decimal("1000000"), "deposit")
+            for item in fills:
+                fill = _make_fill(item)
+                order = writer.submit(
+                    fill.account_id,
+                    _payload(
+                        DEFAULT_INSTRUMENTS["BTC-USD"],
+                        Side.BUY,
+                        "limit",
+                        fill.quantity,
+                        fill.price,
+                        fill.order_id,
+                    ),
+                    fill.ts_ns,
+                )
+                writer.activate(order.order_id, fill.ts_ns)
+                actual = writer.record_fill(
+                    order.order_id,
                     fill.price,
-                    fill.order_id,
-                ),
-                fill.ts_ns,
-            )
-            writer.activate(order.order_id, fill.ts_ns)
-            actual = writer.record_fill(
-                order.order_id,
-                fill.price,
-                fill.quantity,
-                fill.liquidity,
-                fill.cause,
-                fill.ts_ns,
-            )
-            projection, marker = writer.balance_snapshot(fill.account_id)
-            ledger.record_fill(actual, DEFAULT_INSTRUMENTS["BTC-USD"], order, None)
-            snapshots.append((projection, marker))
-            assert ledger.count_postings(f"fill:{actual.fill_id}") == len(
-                fill_postings(actual, DEFAULT_INSTRUMENTS["BTC-USD"])
-            )
-            for expected, snapshot_marker in snapshots:
-                assert ledger.fold_balances(fill.account_id, snapshot_marker) == expected
-        assert ledger.count_fills(f"{example_id}-account") == len(fills)
+                    fill.quantity,
+                    fill.liquidity,
+                    fill.cause,
+                    fill.ts_ns,
+                )
+                projection, marker = writer.balance_snapshot(fill.account_id)
+                ledger.record_fill(actual, DEFAULT_INSTRUMENTS["BTC-USD"], order, None)
+                snapshots.append((projection, marker))
+                assert ledger.count_postings(f"fill:{actual.fill_id}") == len(
+                    fill_postings(actual, DEFAULT_INSTRUMENTS["BTC-USD"])
+                )
+                for expected, snapshot_marker in snapshots:
+                    assert ledger.fold_balances(fill.account_id, snapshot_marker) == expected
+            assert ledger.count_fills(f"{example_id}-account") == len(fills)
+        finally:
+            ledger.close()
     finally:
-        ledger.close()
-        asyncio.run(_drop_database(postgres_dsn_value, database))
+        asyncio.run(_drop_schema(postgres_dsn_value, schema))
