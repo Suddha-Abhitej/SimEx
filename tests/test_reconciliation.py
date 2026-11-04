@@ -81,6 +81,12 @@ def test_reconciliation_folds_only_through_writer_marker():
 
     assert job.run_once() == ()
     assert ledger.markers == [1]
+    assert (
+        job.metrics.registry.get_sample_value(
+            "simex_ledger_reconciliation_last_success_timestamp_seconds"
+        )
+        == 0.000001
+    )
 
 
 def make_job(ledger, clock=None):

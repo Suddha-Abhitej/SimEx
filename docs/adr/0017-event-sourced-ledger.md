@@ -115,10 +115,17 @@ The ledger survives process restart and replay without duplicate fills and suppo
 reconciliation. It costs synchronous database latency on the fill path and requires explicit
 halt/recovery operations when Postgres or the ledger becomes unavailable.
 
+`SyncLedger` performs a blocking cross-thread wait. On the live path that call occurs inside the
+runner coroutine, so a fill stalls the event loop, including market-data processing, the MCP
+server, and reconciliation, for the duration of the ledger commit. The normal bound is the
+500 ms hard timeout; the retry-then-halt path can stall for roughly 3.1 seconds. This interacts
+with the 2,000 ms `max_excess_lag_ms` and 5,000 ms `stale_after_ms` limits, so a halt-path stall
+can trip the stale-data gate. This is a known characteristic to measure during the first live run,
+not a solved problem.
+
 The live exchange runner applies migrations explicitly at startup, then restores the configured
 account before starting market-data processing. If `EXCHANGE_LEDGER_DSN` is unset, it deliberately
 uses the existing in-memory writer and logs that fills are not being persisted; this fallback is
-for development and compatibility, not durable live operation. The runner currently does not
-start the reconciliation job, so
-`simex_ledger_reconciliation_last_success_timestamp_seconds` has no series until reconciliation
-startup and shutdown are wired in a later change; the staleness alert therefore remains inert.
+for development and compatibility, not durable live operation. With a ledger DSN, the live runtime
+also starts reconciliation, so
+`simex_ledger_reconciliation_last_success_timestamp_seconds` is emitted after the first scan.
