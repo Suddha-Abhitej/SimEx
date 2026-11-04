@@ -129,3 +129,36 @@ uses the existing in-memory writer and logs that fills are not being persisted; 
 for development and compatibility, not durable live operation. With a ledger DSN, the live runtime
 also starts reconciliation, so
 `simex_ledger_reconciliation_last_success_timestamp_seconds` is emitted after the first scan.
+
+## Measured
+
+**First live run, 2026-11-04** (Windows x86, Docker Desktop Postgres 16, live Gemini feed). Ten
+fills placed by a language model through the MCP tools, buys and sells. Mean elapsed per fill:
+
+| phase | mean |
+| --- | --- |
+| transaction begin | 1.6 ms |
+| fill insert | 3.1 ms |
+| postings | 7.9 ms |
+| event | 9.5 ms |
+| outbox | 11.1 ms |
+| commit | 19.0 ms |
+| intent to ack | 22.2 ms |
+
+Across all 44 ledger calls in the session, including order persistence, the writer-ack mean was
+9.0 ms. Ten reconciliation runs: zero balance mismatches, zero double-entry violations, zero
+timeouts, zero halts.
+
+Each fill therefore blocks the event loop for about 22 ms and each order submission for about
+9 ms, against the 250 ms hold-back: roughly a dozen fills in quick succession would consume the
+whole ordering margin. That is comfortable at the rate a language model trades and is not
+established for any higher rate. The two-core ARM64 target will be slower.
+
+The 50 ms commit p99 budget remains **unverified**. Every per-phase sample was an exact multiple
+of 15.625 ms, the Windows system timer granularity, so sub-50 ms latencies cannot be resolved on
+this host, and a 19 ms mean leaves little headroom for a p99 below the threshold. Re-measure on
+Linux before relying on `ExchangeLedgerCommitP99TooHigh` (#75).
+
+Lag during this run was negative on all three pairs (level2 p99 of -689, -688 and -682 ms),
+meaning the host clock ran about 0.7 s behind the venue. Fill timing from this session is
+therefore not evidence of honest-fill behaviour (#74).
