@@ -39,6 +39,16 @@ retried briefly after teardown to tolerate socket release and immediate port reu
 still binds only to localhost. A bind failure after retries fails the group and therefore also
 stops the runner and reconciliation job.
 
+## Demo
+
+The demo ran on 2026-11-04 against the live Gemini feed: a language model called `quote`,
+`place_order` and `portfolio` over the localhost MCP server and placed 16 orders, of which 10
+filled. Sells filled 5 of 5, buys 5 of 10, because the market rose during the session; a buy limit
+only fills if the market comes to it, which is the fill model behaving as designed. Fees matched
+the ADR 0014 schedule exactly, with $806.22 of notional at 120 bps producing a $9.67 fee.
+Reconciliation reported zero mismatches at exact Decimal equality throughout. The transcript is
+private under `data/` and is not committed (ADR 0010).
+
 ## Consequences
 
 The MCP surface is deliberately narrow and private, and model input cannot exceed the limits
