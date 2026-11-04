@@ -58,6 +58,14 @@ saying so explicitly.
 - The Coinbase Advanced Trade adapter (`wss://advanced-trade-ws.coinbase.com`) stays for feed
   research only (see hard rules).
 
+## Windows notes
+
+- `.devcontainer/` builds from a local Dockerfile that removes the base image's stale Yarn apt
+  source; without that removal, every feature install fails. Do not revert it.
+- `.gitattributes` normalises line endings so a Windows checkout and the Linux container agree.
+- On Windows PowerShell 5.1, `Set-Content -Encoding utf8` writes a BOM that breaks Dockerfiles.
+  Use `[IO.File]::WriteAllLines` instead.
+
 ## Commands
 
 ```bash
