@@ -166,8 +166,11 @@ class LedgerStateMachine(RuleBasedStateMachine):
         self.writer.expire(order.order_id, T0 + order_index)
         assert self.writer.accounts.totals() == before
 
-    @rule(order_index=st.integers(min_value=0, max_value=20))
-    def fill(self, order_index):
+    @rule(
+        order_index=st.integers(min_value=0, max_value=20),
+        multiplier=st.integers(min_value=1, max_value=1000),
+    )
+    def fill(self, order_index, multiplier):
         open_orders = [
             order
             for order in self.orders.values()
@@ -183,10 +186,7 @@ class LedgerStateMachine(RuleBasedStateMachine):
             return
         order = open_orders[order_index % len(open_orders)]
         instrument = DEFAULT_INSTRUMENTS[order.product_id]
-        quantity = min(
-            order.remaining,
-            _quantity(instrument, 1),
-        )
+        quantity = min(order.remaining, _quantity(instrument, multiplier))
         if quantity <= 0:
             return
         price = order.request.limit_price or self.writer.band_prices[order.order_id]
@@ -201,7 +201,7 @@ class LedgerStateMachine(RuleBasedStateMachine):
         self.fills.append((fill, instrument))
 
     @invariant()
-    def double_entry(self):
+    def fill_postings_are_balanced(self):
         for fill, instrument in self.fills:
             totals = defaultdict(Decimal)
             for posting in fill_postings(fill, instrument):
@@ -320,6 +320,15 @@ class PropertySyncLedger(SyncLedger):
             )
         )
 
+    def posting_totals(self, transaction_id):
+        return self._call(
+            lambda adapter: adapter.connection.fetch(
+                "SELECT asset, SUM(amount) AS total FROM ledger_postings "
+                "WHERE transaction_id = $1 GROUP BY asset",
+                transaction_id,
+            )
+        )
+
 
 @st.composite
 def fill_sequences(draw, example_id):
@@ -397,6 +406,8 @@ def test_postgres_fold_matches_writer_projection_and_replay_is_exactly_once(data
                 projection, marker = writer.balance_snapshot(fill.account_id)
                 ledger.record_fill(actual, DEFAULT_INSTRUMENTS["BTC-USD"], order, None)
                 snapshots.append((projection, marker))
+                posting_totals = ledger.posting_totals(f"fill:{actual.fill_id}")
+                assert all(Decimal(row["total"]) == Decimal(0) for row in posting_totals)
                 assert ledger.count_postings(f"fill:{actual.fill_id}") == len(
                     fill_postings(actual, DEFAULT_INSTRUMENTS["BTC-USD"])
                 )
