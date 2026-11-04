@@ -304,6 +304,14 @@ class PropertySyncLedger(SyncLedger):
             )
         )
 
+    def count_postings(self, transaction_id):
+        return self._call(
+            lambda adapter: adapter.connection.fetchval(
+                "SELECT count(*) FROM ledger_postings WHERE transaction_id = $1",
+                transaction_id,
+            )
+        )
+
 
 @st.composite
 def fill_sequences(draw, example_id):
@@ -356,6 +364,7 @@ def test_postgres_fold_matches_writer_projection_and_replay_is_exactly_once(data
     ledger = PropertySyncLedger(dsn)
     fills = data.draw(fill_sequences(example_id))
     writer = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), DELAY, ledger=ledger)
+    snapshots = []
     try:
         writer.deposit(f"{example_id}-account", "USD", Decimal("1000000"), "deposit")
         for item in fills:
@@ -382,8 +391,13 @@ def test_postgres_fold_matches_writer_projection_and_replay_is_exactly_once(data
                 fill.ts_ns,
             )
             projection, marker = writer.balance_snapshot(fill.account_id)
-            assert ledger.fold_balances(fill.account_id, marker) == projection
             ledger.record_fill(actual, DEFAULT_INSTRUMENTS["BTC-USD"], order, None)
+            snapshots.append((projection, marker))
+            assert ledger.count_postings(f"fill:{actual.fill_id}") == len(
+                fill_postings(actual, DEFAULT_INSTRUMENTS["BTC-USD"])
+            )
+            for expected, snapshot_marker in snapshots:
+                assert ledger.fold_balances(fill.account_id, snapshot_marker) == expected
         assert ledger.count_fills(f"{example_id}-account") == len(fills)
     finally:
         ledger.close()
