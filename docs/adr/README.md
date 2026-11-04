@@ -22,3 +22,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0015](0015-live-runner-merge-and-watermark.md) | Live exchange runner: merge by received time, release to a watermark | Accepted |
 | [0016](0016-stale-data-guard-and-fill-timing.md) | Complete stale-data guard and fill timing rule set | Accepted |
 | [0017](0017-event-sourced-ledger.md) | Event-sourced ledger and durable fills | Accepted |
+| [0018](0018-local-mcp-order-entry.md) | Local MCP order entry over the simulated exchange | Proposed |

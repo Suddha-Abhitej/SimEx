@@ -177,6 +177,15 @@ class ExchangeRunner:
         for product in settings.pairs:
             metrics.set_order_delay(product, settings.order_delay_ms)
 
+    def create_mcp_server(self, account_id, limits, *, port: int = 8765):
+        """Build the private MCP façade around this runner's single simulated account."""
+        from simex.mcp import ExchangeTools, create_server
+
+        return create_server(
+            ExchangeTools(account_id, self.writer, self.engines, limits),
+            port=port,
+        )
+
     async def start(self) -> None:
         partitions = await self.source.start()
         for topic, parts in partitions.items():
