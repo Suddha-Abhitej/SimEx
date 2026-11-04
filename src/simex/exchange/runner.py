@@ -27,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from simex.book.orderbook import BookState
+from simex.ledger import SyncLedger
 from simex.marketdata import decode
 from simex.recorder.schema import Unrecordable, header
 
@@ -141,11 +142,13 @@ class ExchangeRunner:
         *,
         wall_ns: Callable[[], int] = time.time_ns,
         engine_settings: EngineSettings | None = None,
+        ledger: SyncLedger | None = None,
     ) -> None:
         self.settings = settings
         self.source = source
         self.metrics = metrics
         self._wall_ns = wall_ns
+        self.ledger = ledger
         self.engines: dict[str, PairEngine] = {}
         self.gate = StaleDataGate(
             self.engines,
@@ -158,7 +161,10 @@ class ExchangeRunner:
             FeeSchedule.from_env(),
             self.gate,
             int(settings.order_delay_ms * MS),
+            ledger=ledger,
         )
+        if ledger is None:
+            log.warning("exchange ledger is disabled; fills are not being persisted")
         engine_settings = engine_settings or EngineSettings.from_env()
         for product in settings.pairs:
             self.engines[product] = PairEngine(
@@ -187,6 +193,15 @@ class ExchangeRunner:
         )
 
     async def start(self) -> None:
+        if self.ledger is not None:
+            self.writer.restore(self.settings.account_id)
+            if self.settings.account_id not in self.writer.applied_sequences:
+                self.writer.deposit(
+                    self.settings.account_id,
+                    "USD",
+                    self.settings.initial_usd,
+                    f"seed:{self.settings.account_id}:USD:v1",
+                )
         partitions = await self.source.start()
         for topic, parts in partitions.items():
             self.bounds.add_partitions(topic, parts)

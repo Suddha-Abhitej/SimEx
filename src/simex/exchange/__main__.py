@@ -15,6 +15,7 @@ import signal
 from prometheus_client import start_http_server
 
 from simex.ingest.backoff import Backoff
+from simex.ledger import LedgerMetrics, SyncLedger
 
 from .runner import ExchangeRunner
 from .runner_config import RunnerSettings
@@ -27,6 +28,15 @@ log = logging.getLogger("simex.exchange")
 async def main() -> None:
     settings = RunnerSettings.from_env()
     metrics = RunnerMetrics()
+    ledger = None
+    if settings.ledger_dsn is not None:
+        ledger_metrics = LedgerMetrics(registry=metrics.registry)
+        ledger = SyncLedger(settings.ledger_dsn, metrics=ledger_metrics)
+        try:
+            ledger.migrate()
+        except Exception:
+            ledger.close()
+            raise
     start_http_server(settings.metrics_port, registry=metrics.registry)
     log.info(
         "metrics on http://0.0.0.0:%d/metrics; hold-back %.0f ms",
@@ -40,21 +50,25 @@ async def main() -> None:
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, task.cancel)
     backoff = Backoff(1.0, 30.0)
-    while True:
-        source = KafkaMarketSource(
-            settings.kafka_bootstrap_servers,
-            settings.topics,
-            fetch_max_wait_ms=settings.fetch_max_wait_ms,
-        )
-        runner = ExchangeRunner(settings, source, metrics)
-        try:
-            await runner.run()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # Kafka down or a topic missing: start over from a snapshot
-            delay = backoff.next_delay()
-            log.warning("exchange runner stopped (%r); starting over in %.1fs", exc, delay)
-            await asyncio.sleep(delay)
+    try:
+        while True:
+            source = KafkaMarketSource(
+                settings.kafka_bootstrap_servers,
+                settings.topics,
+                fetch_max_wait_ms=settings.fetch_max_wait_ms,
+            )
+            runner = ExchangeRunner(settings, source, metrics, ledger=ledger)
+            try:
+                await runner.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # Kafka down or a topic missing: start over from a snapshot
+                delay = backoff.next_delay()
+                log.warning("exchange runner stopped (%r); starting over in %.1fs", exc, delay)
+                await asyncio.sleep(delay)
+    finally:
+        if ledger is not None:
+            ledger.close()
 
 
 def run() -> None:

@@ -72,12 +72,15 @@ class SyncLedger:
         try:
             connection = await asyncpg.connect(self._dsn)
             self._adapter = LedgerAdapter(connection, metrics=self.metrics)
-            await self._adapter.migrate()
         except BaseException as exc:
             if connection is not None:
                 await connection.close()
             self._startup_error = exc
             self._ready.set()
+
+    def migrate(self) -> None:
+        """Apply the numbered migrations after the connection has been constructed."""
+        self._call(lambda adapter: adapter.migrate(), timeout=STARTUP_TIMEOUT_SECONDS)
 
     async def _stop(self) -> None:
         if self._adapter is not None:

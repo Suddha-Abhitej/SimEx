@@ -27,6 +27,7 @@ from simex.exchange.runner_metrics import RunnerMetrics
 from simex.exchange.source import Fetched, Record
 from simex.ingest.envelope import build_envelope, topics_for
 from simex.ingest.venue import LEVEL2, TRADES, Item
+from simex.ledger import AccountState, LedgerMetrics, ReconciliationJob
 from simex.marketdata import decode
 
 TOPICS = topics_for("gemini")
@@ -321,8 +322,70 @@ def test_the_holdback_setting():
         RunnerSettings(holdback_ms=-1)
     assert RunnerSettings.from_env({"EXCHANGE_MERGE_HOLDBACK_MS": "250"}).holdback_ms == 250
     assert RunnerSettings.from_env({"EXCHANGE_ORDER_DELAY_MS": "125"}).order_delay_ms == 125
+    settings = RunnerSettings.from_env(
+        {
+            "EXCHANGE_LEDGER_DSN": "postgresql://ledger",
+            "EXCHANGE_ACCOUNT_ID": "alice",
+            "EXCHANGE_INITIAL_USD": "125.50",
+        }
+    )
+    assert settings.ledger_dsn == "postgresql://ledger"
+    assert settings.account_id == "alice"
+    assert settings.initial_usd == D("125.50")
     with pytest.raises(ValueError):
         RunnerSettings.from_env({"EXCHANGE_ORDER_DELAY_MS": "-1"})
+
+
+def test_ledger_seed_is_not_credited_again_after_restore():
+    class PersistentLedger:
+        def __init__(self):
+            self.balance = D("0")
+            self.sequence = None
+
+        def load_account(self, account_id):
+            balances = (
+                ({"account_id": account_id, "asset": "USD", "total": self.balance},)
+                if self.sequence is not None
+                else ()
+            )
+            return AccountState((), (), balances, self.sequence)
+
+        def record_deposit(self, account_id, asset, amount, event_key):
+            if self.sequence is None:
+                self.balance += amount
+                self.sequence = 1
+            return self.sequence
+
+        def fold_balances(self, account_id, through_sequence):
+            return {"USD": self.balance}
+
+        def double_entry_violations(self):
+            return ()
+
+    ledger = PersistentLedger()
+    settings = RunnerSettings(pairs=PAIRS, digest_path="", account_id="alice", initial_usd=D("125"))
+
+    first = ExchangeRunner(
+        settings,
+        FakeKafka(market(11, 1), random.Random(11), 0),
+        RunnerMetrics(),
+        ledger=ledger,
+    )
+    asyncio.run(first.start())
+    assert first.writer.balance_totals("alice") == {"USD": D("125")}
+
+    second = ExchangeRunner(
+        settings,
+        FakeKafka(market(12, 1), random.Random(12), 0),
+        RunnerMetrics(),
+        ledger=ledger,
+    )
+    asyncio.run(second.start())
+    assert second.writer.balance_totals("alice") == {"USD": D("125")}
+
+    reconciliation = ReconciliationJob(ledger, LedgerMetrics())
+    reconciliation.register_writer("alice", second.writer)
+    assert reconciliation.run_once() == ()
 
 
 def runner_on(kafka, **settings):
