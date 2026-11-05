@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import uuid
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
+from simex.exchange.runner_metrics import RunnerMetrics
 from simex.mcp import ExchangeTools
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,7 @@ class BaselineAgent:
         *,
         cadence_seconds: float = 60.0,
         dca_quote_amount: Decimal = Decimal("100"),
+        metrics: RunnerMetrics | None = None,
     ) -> None:
         if cadence_seconds <= 0:
             raise ValueError("agent cadence must be positive")
@@ -36,11 +41,29 @@ class BaselineAgent:
         self.tools = tools
         self.cadence_seconds = cadence_seconds
         self.dca_quote_amount = dca_quote_amount
+        self.metrics = metrics if metrics is not None else RunnerMetrics()
         self.random = random.Random(spec.seed)
         self.run_id = uuid.uuid4().hex
         self._fired = False
         self._tick_count = 0
         self._previous_mid: Decimal | None = None
+        self._logged_refusals: set[str] = set()
+
+    def _observe_order(self, result: dict[str, Any]) -> dict[str, Any]:
+        if not result["ok"]:
+            # Gate reasons may append changing diagnostics such as age_ns.
+            reason = result["reason"].split(":", 1)[0]
+            self.metrics.agent_refusals.labels(self.spec.account_id, reason).inc()
+            if reason not in self._logged_refusals:
+                self._logged_refusals.add(reason)
+                log.warning(
+                    "baseline agent %s for account %s refused order for %s: %s",
+                    self.spec.kind,
+                    self.spec.account_id,
+                    self._product(),
+                    result["reason"],
+                )
+        return result
 
     def _order(
         self, side: str, quantity: Decimal, price: Decimal, reasoning: str
@@ -50,17 +73,19 @@ class BaselineAgent:
             rounding=ROUND_DOWN
         ) * instrument.size_increment
         if quantity < instrument.min_size:
-            return {"ok": False, "reason": "below_min_size"}
-        return self.tools.place_order(
-            {
-                "client_order_id": f"{self.spec.kind}-{self.run_id}-{self._tick_count}",
-                "product_id": self._product(),
-                "side": side,
-                "type": "limit",
-                "quantity": str(quantity),
-                "limit_price": str(price),
-                "reasoning": reasoning,
-            }
+            return self._observe_order({"ok": False, "reason": "below_min_size"})
+        return self._observe_order(
+            self.tools.place_order(
+                {
+                    "client_order_id": f"{self.spec.kind}-{self.run_id}-{self._tick_count}",
+                    "product_id": self._product(),
+                    "side": side,
+                    "type": "limit",
+                    "quantity": str(quantity),
+                    "limit_price": str(price),
+                    "reasoning": reasoning,
+                }
+            )
         )
 
     def _product(self) -> str:
@@ -82,17 +107,19 @@ class BaselineAgent:
         bid = Decimal(quote["bids"][0][0]) if quote.get("bids") else ask
         result: dict[str, Any] = {"ok": True, "action": "none"}
         if self.spec.kind == "buy_and_hold" and not self._fired:
-            result = self._order(
-                "buy",
-                self._sized_quantity(
+            base = self.tools.writer.instruments[product].base
+            if Decimal(self.tools.portfolio()["positions"][base]) == 0:
+                result = self._order(
+                    "buy",
+                    self._sized_quantity(
+                        ask,
+                        self.tools.writer.accounts.balance(
+                            self.spec.account_id, self.tools.writer.instruments[product].quote
+                        ).available,
+                    ),
                     ask,
-                    self.tools.writer.accounts.balance(
-                        self.spec.account_id, self.tools.writer.instruments[product].quote
-                    ).available,
-                ),
-                ask,
-                "buy_and_hold: buy once at the current best ask",
-            )
+                    "buy_and_hold: buy once at the current best ask",
+                )
         elif self.spec.kind == "dca":
             result = self._order(
                 "buy",
