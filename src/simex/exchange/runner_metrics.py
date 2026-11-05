@@ -127,6 +127,12 @@ class RunnerMetrics:
             ["agent", "account_id"],
             registry=r,
         )
+        self.agent_refusals = Counter(
+            "simex_exchange_agent_refusals_total",
+            "Refused baseline agent orders by account and reason",
+            ["account_id", "reason"],
+            registry=r,
+        )
         self._gate_last_ns: dict[str, tuple[int, str]] = {}
 
     def set_order_delay(self, product: str, delay_ms: float) -> None:

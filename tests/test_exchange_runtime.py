@@ -1,6 +1,7 @@
 import asyncio
 from decimal import Decimal
 
+from simex.agents import BaselineAgent, BaselineSpec
 from simex.exchange import (
     DEFAULT_INSTRUMENTS,
     AccountWriter,
@@ -244,5 +245,46 @@ def test_agent_failure_is_contained_and_counted():
         task = asyncio.create_task(group._run_agent(BrokenAgent()))
         await task
         assert group.metrics.agent_errors.labels("random", "random")._value.get() == 1
+
+    asyncio.run(scenario())
+
+
+def test_runtime_agents_use_the_served_refusal_metrics(monkeypatch):
+    async def scenario():
+        refused = asyncio.Event()
+
+        async def idle_runner(self):
+            await asyncio.Future()
+
+        async def refuse_order(self):
+            self._order("buy", Decimal(0), Decimal("100"), "test refusal visibility")
+            refused.set()
+            await asyncio.Future()
+
+        monkeypatch.setattr(FakeRunner, "run", idle_runner)
+        monkeypatch.setattr(BaselineAgent, "run_forever", refuse_order)
+        metrics = RunnerMetrics()
+        group = LiveRuntimeGroup(
+            RunnerSettings(
+                pairs=("BTC-USD",), baseline_agents=(BaselineSpec("dca", "baseline", 7),)
+            ),
+            metrics,
+            FakeSource,
+            risk_limits=RiskLimits({"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1000")}),
+            runner_factory=FakeRunner,
+        )
+        task = asyncio.create_task(group.run())
+        try:
+            await asyncio.wait_for(refused.wait(), timeout=5)
+            assert (
+                metrics.registry.get_sample_value(
+                    "simex_exchange_agent_refusals_total",
+                    {"account_id": "baseline", "reason": "below_min_size"},
+                )
+                == 1
+            )
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())

@@ -5,7 +5,9 @@ from decimal import Decimal
 
 import asyncpg
 import pytest
+from test_mcp import make_tools
 
+from simex.agents import BaselineAgent, BaselineSpec
 from simex.exchange import (
     DEFAULT_INSTRUMENTS,
     AccountWriter,
@@ -160,6 +162,54 @@ def test_multiple_accounts_reconcile_exactly():
     finally:
         if store is not None:
             store.close()
+        if ledger is not None:
+            ledger.close()
+        asyncio.run(_drop_schema(dsn, schema))
+
+
+def test_buy_and_hold_does_not_rebuy_after_ledger_restart():
+    dsn = _dsn_or_skip()
+    schema = f"buyhold_{uuid.uuid4().hex}"
+    asyncio.run(_create_schema(dsn, schema))
+    schema_dsn = _schema_dsn(dsn, schema)
+    ledger = None
+    try:
+        ledger = SyncLedger(schema_dsn)
+        ledger.migrate()
+        tools = make_tools()
+        tools.writer.ledger = ledger
+        tools.writer.deposit("owner", "USD", Decimal("1000"), "seed:owner:USD:v1")
+        baseline = BaselineAgent(BaselineSpec("buy_and_hold", "owner", 7), tools)
+        assert baseline.tick()["ok"]
+        order = next(iter(tools.writer.orders.values()))
+        tools.writer.activate(order.order_id, order.effective_at_ns)
+        tools.writer.record_fill(
+            order.order_id,
+            Decimal("101"),
+            order.request.quantity,
+            Liquidity.TAKER,
+            FillCause.TAKER,
+            order.effective_at_ns,
+        )
+        ledger.close()
+        ledger = None
+
+        for _ in range(2):
+            ledger = SyncLedger(schema_dsn)
+            ledger.migrate()
+            restored = make_tools()
+            restored.writer.ledger = ledger
+            restored.writer.restore("owner")
+            assert Decimal(restored.portfolio()["positions"]["BTC"]) == order.request.quantity
+            rebuilt = BaselineAgent(BaselineSpec("buy_and_hold", "owner", 7), restored)
+
+            assert rebuilt.tick() == {"ok": True, "action": "none"}
+            assert rebuilt.tick() == {"ok": True, "action": "none"}
+            assert len(restored.writer.orders) == 1
+            assert len(restored.history()["fills"]) == 1
+            ledger.close()
+            ledger = None
+    finally:
         if ledger is not None:
             ledger.close()
         asyncio.run(_drop_schema(dsn, schema))

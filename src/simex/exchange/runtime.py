@@ -125,6 +125,7 @@ class LiveRuntimeGroup:
                     ),
                     cadence_seconds=self.settings.agent_cadence_seconds,
                     dca_quote_amount=self.settings.agent_dca_quote_amount,
+                    metrics=self.metrics,
                 )
                 for spec in self.settings.baseline_agents
             ]
