@@ -66,6 +66,7 @@ def order_payload(order_id="demo-1", order_type="limit"):
         "side": "buy",
         "type": order_type,
         "quantity": "0.1",
+        "reasoning": "test order",
     }
     if order_type == "limit":
         payload["limit_price"] = "100"
@@ -89,7 +90,7 @@ def test_features_are_instantaneous_decimal_book_values():
         "depth": 1,
         "mid": "100.5",
         "spread": "1",
-        "depth_imbalance": "0",
+        "depth_imbalance": "0.000000",
     }
 
 
@@ -105,6 +106,26 @@ def test_place_order_delegates_to_writer_and_is_idempotent():
     assert second["ok"]
     assert first["order"]["order_id"] == second["order"]["order_id"]
     assert len(tools.writer.orders) == 1
+
+
+def test_place_order_requires_non_empty_reasoning_before_writer():
+    tools = make_tools()
+    calls = 0
+    original_submit = tools.writer.submit
+
+    def submit(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_submit(*args, **kwargs)
+
+    tools.writer.submit = submit
+    for reasoning in ("", "   "):
+        assert tools.place_order({**order_payload(reasoning), "reasoning": reasoning}) == {
+            "ok": False,
+            "reason": "reasoning_required",
+        }
+    assert calls == 0
+    assert tools.writer.orders == {}
 
 
 def test_reasoning_is_returned_verbatim():
@@ -219,6 +240,7 @@ def test_place_order_rejects_risk_limit_and_non_string_decimal():
             "type": "limit",
             "quantity": "1.1",
             "limit_price": "100",
+            "reasoning": "test risk limit",
         }
     ) == {"ok": False, "reason": "quantity_limit"}
     assert tools.place_order(
@@ -229,6 +251,7 @@ def test_place_order_rejects_risk_limit_and_non_string_decimal():
             "type": "limit",
             "quantity": 0.1,
             "limit_price": "100",
+            "reasoning": "test decimal type",
         }
     ) == {"ok": False, "reason": "bad_decimal_or_product"}
 

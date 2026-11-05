@@ -172,6 +172,7 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
                 "type": "limit",
                 "quantity": "0.1",
                 "limit_price": "100",
+                "reasoning": "verify the rebuilt MCP writer",
             }
         )
         assert result["ok"]

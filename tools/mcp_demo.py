@@ -50,6 +50,7 @@ def record_demo(
             "type": "limit",
             "quantity": str(quantity),
             "limit_price": str(best_ask),
+            "reasoning": "cross the current best ask for the private demo",
         }
     transcript = [
         {"tool": "quote", "result": quote},

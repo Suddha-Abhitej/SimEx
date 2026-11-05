@@ -275,6 +275,7 @@ class LedgerAdapter:
             order.request.client_order_id,
             json.dumps(request),
             order.status.value,
+            # Queryable copy of the value also carried in the request JSON.
             order.request.reasoning,
             order.created_at_ns,
             order.effective_at_ns,

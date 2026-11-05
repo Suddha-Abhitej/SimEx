@@ -128,7 +128,9 @@ class ExchangeTools:
                     else (best_bid + best_ask) / 2,
                     "spread": None if best_bid is None or best_ask is None else best_ask - best_bid,
                     "depth_imbalance": (
-                        None if not total_depth else (bid_depth - ask_depth) / total_depth
+                        None
+                        if not total_depth
+                        else ((bid_depth - ask_depth) / total_depth).quantize(Decimal("0.000001"))
                     ),
                 }
             )
@@ -138,6 +140,9 @@ class ExchangeTools:
     def place_order(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             return {"ok": False, "reason": "bad_payload"}
+        reasoning = payload.get("reasoning")
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            return {"ok": False, "reason": "reasoning_required"}
         if not isinstance(payload.get("quantity"), str) or (
             payload.get("limit_price") is not None
             and not isinstance(payload.get("limit_price"), str)
@@ -263,7 +268,7 @@ class ExchangeTools:
             fills = self.writer.ledger.history(self.account_id, limit)
         except LedgerHalted:
             return {"ok": False, "reason": "ledger_halted"}
-        except (AttributeError, RuntimeError, ValueError):
+        except (RuntimeError, ValueError):
             return {"ok": False, "reason": "history_unavailable"}
         return {"ok": True, "fills": _json_value(fills)}
 
