@@ -30,6 +30,7 @@ from .instruments import Instrument
 
 _CLIENT_ID = re.compile(r"[A-Za-z0-9._:-]{1,64}")
 _ORDER_NAMESPACE = uuid.UUID("5d1e7f0a-3c2b-4e8f-9a61-2f4b8c0d7e13")
+MAX_REASONING_LENGTH = 8192
 
 
 class Side(StrEnum):
@@ -107,6 +108,7 @@ class OrderRequest:
     type: OrderType
     quantity: Decimal  # in the base currency
     limit_price: Decimal | None = None  # limit orders only
+    reasoning: str = ""
 
     @classmethod
     def parse(cls, payload: Mapping) -> OrderRequest:
@@ -127,7 +129,14 @@ class OrderRequest:
             price = _decimal(payload, "limit_price")
         elif payload.get("limit_price") is not None:
             raise OrderError("bad_field", "a market order has no limit_price")
-        return cls(client_order_id, product, side, kind, _decimal(payload, "quantity"), price)
+        reasoning = payload.get("reasoning", "")
+        if not isinstance(reasoning, str) or len(reasoning) > MAX_REASONING_LENGTH:
+            raise OrderError(
+                "bad_reasoning", f"reasoning must be at most {MAX_REASONING_LENGTH} characters"
+            )
+        return cls(
+            client_order_id, product, side, kind, _decimal(payload, "quantity"), price, reasoning
+        )
 
     def check(self, instrument: Instrument) -> None:
         """The pair's grids and minimum. Off-grid values are rejected, never rounded."""
@@ -154,6 +163,7 @@ class OrderRequest:
             "type": self.type.value,
             "quantity": str(self.quantity),
             "limit_price": None if self.limit_price is None else str(self.limit_price),
+            "reasoning": self.reasoning,
         }
 
 
@@ -226,6 +236,7 @@ class Order:
             type=OrderType(record["type"]),
             quantity=Decimal(record["quantity"]),
             limit_price=(None if record["limit_price"] is None else Decimal(record["limit_price"])),
+            reasoning=record.get("reasoning") or "",
         )
         order = cls(
             order_id=record["order_id"],
