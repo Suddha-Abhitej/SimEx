@@ -6,7 +6,6 @@ import asyncio
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +20,7 @@ from simex.exchange import (
     PairEngine,
     Side,
 )
+from simex.exchange.risk import RiskLimits
 from simex.exchange.writer import band_price
 from simex.ledger import LedgerHalted
 
@@ -35,32 +35,6 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_value(item) for item in value]
     return value
-
-
-@dataclass(frozen=True)
-class RiskLimits:
-    max_quantity: Mapping[str, Decimal]
-    max_notional: Mapping[str, Decimal]
-
-    def __post_init__(self) -> None:
-        if set(self.max_quantity) != set(self.max_notional):
-            raise ValueError("risk limits must cover the same products")
-        if any(
-            not isinstance(value, Decimal) or not value.is_finite() or value <= 0
-            for limits in (self.max_quantity, self.max_notional)
-            for value in limits.values()
-        ):
-            raise ValueError("risk limits must be positive finite Decimals")
-
-    def check(self, product_id: str, quantity: Decimal, price: Decimal | None) -> str | None:
-        maximum = self.max_quantity.get(product_id)
-        if maximum is None:
-            return "product_not_allowed"
-        if quantity > maximum:
-            return "quantity_limit"
-        if price is not None and price * quantity > self.max_notional[product_id]:
-            return "notional_limit"
-        return None
 
 
 class ExchangeTools:
@@ -157,7 +131,10 @@ class ExchangeTools:
             order_request.check(instrument)
             quantity = order_request.quantity
             price = order_request.limit_price
-            if price is None:
+            if (
+                price is None
+                and (self.account_id, order_request.client_order_id) not in self.writer.by_key
+            ):
                 decision = self.writer.gate.check(order_request.product_id, self.clock_ns())
                 if not decision.open:
                     return {"ok": False, "reason": "no_band_price"}
@@ -172,9 +149,8 @@ class ExchangeTools:
             return {"ok": False, "reason": "bad_order"}
         if not quantity.is_finite() or (price is not None and not price.is_finite()):
             return {"ok": False, "reason": "bad_decimal"}
-        reason = self.limits.check(order_request.product_id, quantity, price)
-        if reason is not None:
-            return {"ok": False, "reason": reason}
+        if self.writer.risk_limits is None:
+            return {"ok": False, "reason": "risk_limits_missing"}
         if self.account_id in self.writer.halted_accounts:
             return {"ok": False, "reason": "account_halted"}
         if self.writer.halted:
@@ -189,6 +165,7 @@ class ExchangeTools:
             return {
                 "ok": False,
                 "reason": order.reject_reason or "order_rejected",
+                **order.reject_details,
                 "order": _json_value(order.to_dict()),
             }
         try:

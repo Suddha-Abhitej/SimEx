@@ -14,8 +14,9 @@ from simex.ledger import (
     ReconciliationJob,
     SyncLedger,
 )
-from simex.mcp import ExchangeTools, RiskLimits, run_server_async
+from simex.mcp import ExchangeTools, run_server_async
 
+from .risk import RiskLimits
 from .runner import ExchangeRunner
 from .runner_config import RunnerSettings
 from .runner_metrics import RunnerMetrics
@@ -71,21 +72,25 @@ class LiveRuntimeGroup:
     async def run(self) -> None:
         self.source = self.source_factory()
         try:
-            if (
-                self.settings.mcp_port is not None or self.settings.baseline_agents
-            ) and self.risk_limits is None:
+            if self.risk_limits is None:
                 suffixes = self.settings.pairs
                 variables = ", ".join(
-                    f"EXCHANGE_MCP_MAX_{kind}_{product.replace('-', '_')}"
+                    f"EXCHANGE_MAX_{kind}_{product.replace('-', '_')}"
                     for product in suffixes
-                    for kind in ("QUANTITY", "NOTIONAL")
+                    for kind in ("QUANTITY", "NOTIONAL", "POSITION")
                 )
-                raise ValueError(f"MCP or baseline agents require risk limits; set {variables}")
+                raise ValueError(f"live account risk limits are required; set {variables}")
+            if set(self.risk_limits.max_quantity) != set(self.settings.pairs):
+                raise ValueError("live account risk limits must cover all configured pairs")
             if self.settings.ledger_dsn is not None:
                 self.ledger = SyncLedger(self.settings.ledger_dsn, metrics=self.ledger_metrics)
                 self.ledger.migrate()
             self.runner = self.runner_factory(
-                self.settings, self.source, self.metrics, ledger=self.ledger
+                self.settings,
+                self.source,
+                self.metrics,
+                ledger=self.ledger,
+                risk_limits=self.risk_limits,
             )
             if self.ledger is not None:
                 self.store = self.store_factory(self.settings.ledger_dsn)

@@ -83,7 +83,7 @@ def test_reasoning_and_history_survive_ledger_restart():
             "owner",
             writer,
             {},
-            RiskLimits({}, {}),
+            RiskLimits({}, {}, {}),
         )
         order = writer.submit(
             "owner",
@@ -125,7 +125,7 @@ def test_reasoning_and_history_survive_ledger_restart():
             "owner",
             restored,
             {},
-            RiskLimits({}, {}),
+            RiskLimits({}, {}, {}),
         ).history()
         assert restored.orders[order.order_id].request.reasoning == reasoning
         assert history["ok"]

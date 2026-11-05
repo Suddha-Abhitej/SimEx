@@ -1,6 +1,8 @@
 import asyncio
 from decimal import Decimal
 
+import pytest
+
 from simex.agents import BaselineAgent, BaselineSpec
 from simex.exchange import (
     DEFAULT_INSTRUMENTS,
@@ -9,6 +11,7 @@ from simex.exchange import (
     GateDecision,
     PairEngine,
 )
+from simex.exchange.runner import ExchangeRunner
 from simex.exchange.runner_config import RunnerSettings
 from simex.exchange.runner_metrics import RunnerMetrics
 from simex.exchange.runtime import LiveRuntimeGroup
@@ -84,9 +87,14 @@ class FakeReconciliation:
 class FakeRunner:
     calls = 0
 
-    def __init__(self, settings, source, metrics, *, ledger):
+    def __init__(self, settings, source, metrics, *, ledger, risk_limits=None):
         self.writer = AccountWriter(
-            DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), 0, ledger=ledger
+            DEFAULT_INSTRUMENTS,
+            FeeSchedule(),
+            OpenGate(),
+            0,
+            ledger=ledger,
+            risk_limits=risk_limits,
         )
         self.engines = {
             "BTC-USD": PairEngine("BTC-USD", self.writer),
@@ -142,6 +150,7 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
                     "ETH-USD": Decimal("1000"),
                     "SOL-USD": Decimal("1000"),
                 },
+                {"BTC-USD": Decimal("1"), "ETH-USD": Decimal("1"), "SOL-USD": Decimal("1")},
             ),
             server_runner=server,
             runner_factory=FakeRunner,
@@ -200,7 +209,14 @@ def test_ledger_construction_failure_stops_source(monkeypatch):
     settings = RunnerSettings(ledger_dsn="fake", pairs=("BTC-USD",))
 
     async def scenario():
-        group = LiveRuntimeGroup(settings, RunnerMetrics(), lambda: source)
+        group = LiveRuntimeGroup(
+            settings,
+            RunnerMetrics(),
+            lambda: source,
+            risk_limits=RiskLimits(
+                {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1000")}, {"BTC-USD": Decimal("1")}
+            ),
+        )
         try:
             await group.run()
         except RuntimeError as exc:
@@ -210,11 +226,12 @@ def test_ledger_construction_failure_stops_source(monkeypatch):
     assert source.stopped
 
 
-def test_mcp_requires_environment_risk_limits():
+@pytest.mark.parametrize("mcp_port", [None, 8765])
+def test_live_runtime_requires_environment_risk_limits_even_without_mcp(mcp_port):
     settings = RunnerSettings(
         pairs=("BTC-USD",),
         ledger_dsn=None,
-        mcp_port=8765,
+        mcp_port=mcp_port,
     )
     group = LiveRuntimeGroup(settings, RunnerMetrics(), FakeSource)
 
@@ -225,8 +242,9 @@ def test_mcp_requires_environment_risk_limits():
     else:
         raise AssertionError("missing MCP risk limits were accepted")
 
-    assert "EXCHANGE_MCP_MAX_QUANTITY_BTC_USD" in message
-    assert "EXCHANGE_MCP_MAX_NOTIONAL_BTC_USD" in message
+    assert "EXCHANGE_MAX_QUANTITY_BTC_USD" in message
+    assert "EXCHANGE_MAX_NOTIONAL_BTC_USD" in message
+    assert "EXCHANGE_MAX_POSITION_BTC_USD" in message
 
 
 def test_agent_failure_is_contained_and_counted():
@@ -245,6 +263,58 @@ def test_agent_failure_is_contained_and_counted():
         task = asyncio.create_task(group._run_agent(BrokenAgent()))
         await task
         assert group.metrics.agent_errors.labels("random", "random")._value.get() == 1
+
+    asyncio.run(scenario())
+
+
+def test_live_owner_writer_enforces_limits_with_mcp_disabled():
+    async def scenario():
+        ready = asyncio.Event()
+        captured = []
+
+        class ProbeRunner(ExchangeRunner):
+            async def run(self):
+                self.writer.gate = OpenGate()
+                self.writer.deposit("owner", "USD", Decimal("1000"), "seed")
+                captured.append(
+                    self.writer.submit(
+                        "owner",
+                        {
+                            "client_order_id": "direct",
+                            "product_id": "BTC-USD",
+                            "side": "buy",
+                            "type": "limit",
+                            "quantity": "0.2",
+                            "limit_price": "100",
+                        },
+                        0,
+                    )
+                )
+                ready.set()
+                await asyncio.Future()
+
+        source = FakeSource()
+        limits = RiskLimits(
+            {"BTC-USD": Decimal("0.1")}, {"BTC-USD": Decimal("1000")}, {"BTC-USD": Decimal("1")}
+        )
+        group = LiveRuntimeGroup(
+            RunnerSettings(pairs=("BTC-USD",), mcp_port=None),
+            RunnerMetrics(),
+            lambda: source,
+            risk_limits=limits,
+            runner_factory=ProbeRunner,
+        )
+        task = asyncio.create_task(group.run())
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=5)
+            assert captured[0].reject_reason == "quantity_limit"
+            assert captured[0].reject_details["limit"] == "0.1"
+            assert group.runner.writer.risk_limits is limits
+            assert group.tools is None
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        assert source.stopped
 
     asyncio.run(scenario())
 
@@ -270,7 +340,9 @@ def test_runtime_agents_use_the_served_refusal_metrics(monkeypatch):
             ),
             metrics,
             FakeSource,
-            risk_limits=RiskLimits({"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1000")}),
+            risk_limits=RiskLimits(
+                {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1000")}, {"BTC-USD": Decimal("1")}
+            ),
             runner_factory=FakeRunner,
         )
         task = asyncio.create_task(group.run())
