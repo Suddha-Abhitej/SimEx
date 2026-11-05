@@ -114,11 +114,11 @@ def apply_step(w: AccountWriter, gate: Gate, step: tuple, now: int) -> None:
             if qty <= 0:
                 qty = order.remaining
             if n_off < 0:
-                before = (order.status, order.filled_quantity, len(w.events))
+                before = (order.status, order.filled_quantity, w.event_sequence)
                 try:
                     w.record_fill(order.order_id, price, qty, liquidity, cause, now)
                 except (InvalidTransition, ValueError):
-                    assert (order.status, order.filled_quantity, len(w.events)) == before
+                    assert (order.status, order.filled_quantity, w.event_sequence) == before
                     return
                 raise AssertionError(f"a fill at {price}, worse than {edge}, was accepted")
             w.record_fill(order.order_id, price, qty, liquidity, cause, now)
@@ -270,9 +270,9 @@ class WriterMachine(RuleBasedStateMachine):
     @rule()
     def duplicates_return_the_same_order(self):
         order = next(iter(self.w.orders.values()))
-        before = len(self.w.events)
+        before = self.w.event_sequence
         again = self.w.submit(order.account_id, order.request, self.now)
-        assert again is order and len(self.w.events) == before
+        assert again is order and self.w.event_sequence == before
 
 
 TestWriterMachine = WriterMachine.TestCase
@@ -295,5 +295,6 @@ def test_replaying_the_same_sequence_gives_byte_identical_events(steps):
             now += dt
             apply_step(w, gate, s, now)
         check_invariants(w)
-        runs.append(json.dumps(w.events, sort_keys=True))
+        assert len(w.events) == w.event_sequence, "test history was evicted"
+        runs.append(json.dumps(list(w.events), sort_keys=True))
     assert runs[0] == runs[1]

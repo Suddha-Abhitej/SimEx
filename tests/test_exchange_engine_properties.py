@@ -209,7 +209,7 @@ class Run:
 
     def apply(self, event):
         engine, writer = self.engine, self.writer
-        before_events = len(writer.events)
+        before_sequence = writer.event_sequence
         synced_before = engine.book.state is BookState.SYNCED
         book_before = {"ask": dict(engine.book.asks.items()), "bid": dict(engine.book.bids.items())}
         depleted_before = {k: v.quantity for k, v in engine.depletion.items()}
@@ -219,7 +219,9 @@ class Run:
             if o.order_id in engine.pending and o.effective_at_ns <= self.now
         }
         engine.on_event(event)
-        new_fills = [e["fill"] for e in writer.events[before_events:] if e["type"] == "fill"]
+        oldest, _, events = writer.events_after(before_sequence)
+        assert oldest <= before_sequence + 1, "test lost events before checking fill invariants"
+        new_fills = [e["fill"] for e in events if e["type"] == "fill"]
         taken: dict[tuple[str, D], D] = {}
         maker_from_print = D(0)
         for fill in new_fills:
@@ -251,7 +253,8 @@ class Run:
         check_invariants(writer)
 
     def events(self):
-        return json.dumps(self.writer.events, sort_keys=True)
+        assert len(self.writer.events) == self.writer.event_sequence, "test history was evicted"
+        return json.dumps(list(self.writer.events), sort_keys=True)
 
     def outcome(self):
         return outcome(self.writer)

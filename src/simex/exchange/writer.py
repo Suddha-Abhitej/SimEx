@@ -3,7 +3,8 @@
 It owns every order record and every balance; one task drives it, so nothing here locks. The
 pair engines (#8) own matching and the book, and report back through `record_fill`, `activate`,
 `cancel_now`, `expire` and `reject_on_effect`. Every change is appended to `events` with a
-sequence number, for the ledger to persist later.
+sequence number in a bounded notification buffer. Fill notifications follow ledger commit;
+the buffer is not durable history.
 
 Idempotency: (account_id, client_order_id) names one order forever. The same key with the same
 request returns that order as it is now, whether it was accepted or rejected; the same key with
@@ -20,6 +21,7 @@ Hooks for the next issues, deliberately not implemented here:
 from __future__ import annotations
 
 import threading
+import uuid
 from collections.abc import Mapping
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Protocol
@@ -31,6 +33,7 @@ from .accounts import (
     Reservation,
     required_reservation,
 )
+from .events import DEFAULT_EVENT_BUFFER_SIZE, EventJournal
 from .fees import FeeSchedule, Liquidity
 from .gate import GateDecision
 from .instruments import BPS, Instrument
@@ -98,6 +101,7 @@ class AccountWriter:
         ledger: AccountLedger | None = None,
         *,
         risk_limits: RiskLimits | None = None,
+        event_buffer_size: int = DEFAULT_EVENT_BUFFER_SIZE,
     ) -> None:
         if delay_ns < 0:
             raise ValueError("delay_ns can't be negative")
@@ -110,14 +114,36 @@ class AccountWriter:
         self.risk_limits = risk_limits
         if risk_limits is not None and not set(risk_limits.max_quantity) <= set(self.instruments):
             raise ValueError("risk limits contain an unknown product")
-        self.halted = False
+        self._halted = False
         self.halted_accounts: set[str] = set()
         self._balance_lock = threading.RLock()
         self.applied_sequences: dict[str, int] = {}
         self.orders: dict[str, Order] = {}
         self.by_key: dict[tuple[str, str], str] = {}
         self.band_prices: dict[str, Decimal] = {}  # market order -> the band edge it may reach
-        self.events: list[dict] = []
+        self.stream_id = uuid.uuid4().hex
+        self._journal = EventJournal(event_buffer_size)
+        self.events = self._journal.events
+
+    @property
+    def event_sequence(self) -> int:
+        return self._journal.sequence
+
+    def events_after(self, sequence: int) -> tuple[int, int, tuple[dict, ...]]:
+        return self._journal.after(sequence)
+
+    def watch_events(self):
+        return self._journal.watch()
+
+    @property
+    def halted(self) -> bool:
+        return self._halted
+
+    @halted.setter
+    def halted(self, value: bool) -> None:
+        if value != self._halted:
+            self._halted = value
+            self._emit("halt", scope="writer", halted=value)
 
     def _persist_order(self, order: Order) -> None:
         if self.ledger is None:
@@ -137,10 +163,14 @@ class AccountWriter:
             raise RuntimeError("account writer is halted")
 
     def halt_account(self, account_id: str) -> None:
-        self.halted_accounts.add(account_id)
+        if account_id not in self.halted_accounts:
+            self.halted_accounts.add(account_id)
+            self._emit("halt", scope="account", account_id=account_id, halted=True)
 
     def lift_account_halt(self, account_id: str) -> None:
-        self.halted_accounts.discard(account_id)
+        if account_id in self.halted_accounts:
+            self.halted_accounts.discard(account_id)
+            self._emit("halt", scope="account", account_id=account_id, halted=False)
 
     def balance_totals(self, account_id: str) -> dict[str, Decimal]:
         return {
@@ -184,7 +214,7 @@ class AccountWriter:
             self.accounts.deposit(account_id, asset, amount)
 
     def _emit(self, kind: str, **fields) -> None:
-        self.events.append({"seq": len(self.events) + 1, "type": kind, **fields})
+        self._journal.append(kind, **fields)
 
     # Orders ------------------------------------------------------------------------------------
 

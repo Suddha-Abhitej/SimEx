@@ -165,6 +165,7 @@ class ExchangeRunner:
             int(settings.order_delay_ms * MS),
             ledger=ledger,
             risk_limits=risk_limits,
+            event_buffer_size=settings.event_buffer_size,
         )
         if ledger is None:
             log.warning("exchange ledger is disabled; fills are not being persisted")
@@ -181,7 +182,7 @@ class ExchangeRunner:
         self.watermarks: dict[str, int] = {}
         self.unparsed = 0
         self._was_caught_up: set[tuple[str, int]] = set()  # at the previous fetch
-        self._writer_events_seen = 0
+        self._writer_event_seq = 0
         self._delay_logged: set[str] = set()
         for product in settings.pairs:
             metrics.set_order_delay(product, settings.order_delay_ms)
@@ -321,12 +322,17 @@ class ExchangeRunner:
                     else "",
                 )
                 self._delay_logged.add(product)
-        for event in self.writer.events[self._writer_events_seen :]:
+        oldest, latest, events = self.writer.events_after(self._writer_event_seq)
+        missed = oldest - self._writer_event_seq - 1
+        if missed > 0:
+            self.metrics.writer_event_gaps.inc(missed)
+            log.warning("writer event buffer evicted %d events before metric collection", missed)
+        for event in events:
             if event["type"] == "order_rejected":
                 order = event["order"]
                 reason = order.get("reject_reason", "unknown").split(":", 1)[0]
                 self.metrics.rejections.labels(order["product_id"], reason).inc()
-        self._writer_events_seen = len(self.writer.events)
+        self._writer_event_seq = latest
 
     def _apply(self, arrival: Arrival, late: bool) -> None:
         self.digests.add(arrival, late)

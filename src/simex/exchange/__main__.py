@@ -14,6 +14,7 @@ import signal
 
 from prometheus_client import start_http_server
 
+from simex.api import validate_api_configuration
 from simex.env import load_environment
 from simex.ingest.backoff import Backoff
 from simex.ledger import (
@@ -32,6 +33,8 @@ log = logging.getLogger("simex.exchange")
 async def main() -> None:
     load_environment(log)
     settings = RunnerSettings.from_env()
+    api_token = os.environ.get("EXCHANGE_API_TOKEN")
+    validate_api_configuration(settings, api_token)
     limits = RiskLimits.from_env(settings.pairs)
     metrics = RunnerMetrics()
     ledger_metrics = (
@@ -63,6 +66,7 @@ async def main() -> None:
                 ),
                 ledger_metrics=ledger_metrics,
                 risk_limits=limits,
+                api_token=api_token,
             )
             await group.run()
         except asyncio.CancelledError:

@@ -2,12 +2,13 @@ import subprocess
 import sys
 
 
-def test_shared_tools_import_without_loading_mcp_transport():
+def test_shared_tools_and_api_import_without_loading_mcp_transport():
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             "import sys; from simex.exchange.tools import ExchangeTools, RiskLimits; "
+            "from simex.api import create_app; "
             "assert not any(n == 'mcp' or n.startswith('mcp.') or n.startswith('simex.mcp') "
             "for n in sys.modules)",
         ],

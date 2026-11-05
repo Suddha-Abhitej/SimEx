@@ -8,6 +8,8 @@ from collections.abc import Callable
 from typing import Any
 
 from simex.agents import BaselineAgent
+from simex.api import run_server_async as run_api_server_async
+from simex.api import validate_api_configuration
 from simex.ledger import (
     LedgerMetrics,
     PostgresReconciliationStore,
@@ -36,6 +38,8 @@ class LiveRuntimeGroup:
         ledger_metrics: LedgerMetrics | None = None,
         risk_limits: RiskLimits | None = None,
         server_runner: Callable[..., Any] = run_server_async,
+        api_runner: Callable[..., Any] = run_api_server_async,
+        api_token: str | None = None,
         runner_factory: Callable[..., ExchangeRunner] = ExchangeRunner,
         store_factory: Callable[..., PostgresReconciliationStore] = PostgresReconciliationStore,
     ) -> None:
@@ -45,6 +49,8 @@ class LiveRuntimeGroup:
         self.ledger_metrics = ledger_metrics
         self.risk_limits = risk_limits
         self.server_runner = server_runner
+        self.api_runner = api_runner
+        self._api_token = api_token
         self.runner_factory = runner_factory
         self.store_factory = store_factory
         self.ledger: SyncLedger | None = None
@@ -52,6 +58,7 @@ class LiveRuntimeGroup:
         self.runner: ExchangeRunner | None = None
         self.reconciliation: ReconciliationJob | None = None
         self.tools: ExchangeTools | None = None
+        self.tools_by_account: dict[str, ExchangeTools] = {}
         self.store: PostgresReconciliationStore | None = None
         self.tasks: list[asyncio.Task[Any]] = []
         self.agents: list[BaselineAgent] = []
@@ -72,6 +79,7 @@ class LiveRuntimeGroup:
     async def run(self) -> None:
         self.source = self.source_factory()
         try:
+            validate_api_configuration(self.settings, self._api_token)
             if self.risk_limits is None:
                 suffixes = self.settings.pairs
                 variables = ", ".join(
@@ -106,17 +114,34 @@ class LiveRuntimeGroup:
                 self.tasks.append(
                     asyncio.create_task(self.reconciliation.run_forever(), name="reconciliation")
                 )
-            if self.ledger is not None and self.settings.mcp_port is not None:
+            if self.ledger is not None and (
+                self.settings.mcp_port is not None or self.settings.api_port is not None
+            ):
                 self.tools = ExchangeTools(
                     self.settings.account_id,
                     self.runner.writer,
                     self.runner.engines,
                     self.risk_limits,
                 )
+                self.tools_by_account[self.settings.account_id] = self.tools
+            if self.tools is not None and self.settings.mcp_port is not None:
                 self.tasks.append(
                     asyncio.create_task(
                         self.server_runner(self.tools, port=self.settings.mcp_port),
                         name="mcp-server",
+                    )
+                )
+            if self.tools is not None and self.settings.api_port is not None:
+                self.tasks.append(
+                    asyncio.create_task(
+                        self.api_runner(
+                            self.tools,
+                            port=self.settings.api_port,
+                            token=self._api_token,
+                            heartbeat_seconds=self.settings.api_heartbeat_seconds,
+                            send_timeout_seconds=self.settings.api_send_timeout_seconds,
+                        ),
+                        name="api-server",
                     )
                 )
             self.agents = [

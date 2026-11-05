@@ -347,7 +347,7 @@ only (ADR 0002).
 fill engines live: it merges `md.level2` and `md.trades` per pair by received time, exactly the
 order a replay uses, and advances each engine only to a watermark below which every record has
 been consumed ([ADR 0015](docs/adr/0015-live-runner-merge-and-watermark.md)). So an order takes
-effect against the book of its effective time, never an older one. No order entry yet; metrics
+effect against the book of its effective time, never an older one. Metrics are
 on :9104 (late records, delivery latency, watermark lag), with the `ExchangeLateRecords` and
 `ExchangeWatermarkStalled` alerts.
 
@@ -359,6 +359,12 @@ python tools/merge_replay_check.py           # after a full UTC hour: live order
 ```
 
 Or open the repo in a GitHub Codespace; the dev container installs everything.
+
+### Private API
+
+The optional [private REST API and fills stream](docs/private-api.md) shares the running exchange's
+account writer and trading operations with MCP. It binds only to localhost and requires a bearer
+secret and the ledger; set `EXCHANGE_API_PORT` to enable it.
 
 ## Decisions
 
