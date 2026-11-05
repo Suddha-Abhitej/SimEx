@@ -14,6 +14,8 @@ import signal
 
 from prometheus_client import start_http_server
 
+from simex.env import load_environment
+
 from .backoff import Backoff
 from .client import Ingestor
 from .config import Settings
@@ -62,6 +64,7 @@ async def connect_kafka(settings: Settings, topics: Topics, channels: tuple[str,
 
 
 async def main() -> None:
+    load_environment(log)
     settings = Settings.from_env()
     try:
         settings.check()

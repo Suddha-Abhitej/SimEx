@@ -54,6 +54,14 @@ class FakeStore:
         pass
 
 
+class FakeSource:
+    def __init__(self):
+        self.stopped = False
+
+    async def stop(self):
+        self.stopped = True
+
+
 class FakeReconciliation:
     instances = []
 
@@ -109,6 +117,12 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
     )
     captured = []
     release = asyncio.Event()
+    sources = []
+
+    def source_factory():
+        source = FakeSource()
+        sources.append(source)
+        return source
 
     async def server(tools, *, port):
         captured.append(tools)
@@ -118,7 +132,7 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
         first = LiveRuntimeGroup(
             settings,
             RunnerMetrics(),
-            lambda: object(),
+            source_factory,
             ledger_metrics=LedgerMetrics(),
             risk_limits=RiskLimits(
                 {"BTC-USD": Decimal("1"), "ETH-USD": Decimal("1"), "SOL-USD": Decimal("1")},
@@ -140,7 +154,7 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
         second = LiveRuntimeGroup(
             settings,
             RunnerMetrics(),
-            lambda: object(),
+            source_factory,
             ledger_metrics=LedgerMetrics(),
             risk_limits=first.risk_limits,
             server_runner=server,
@@ -169,6 +183,29 @@ def test_rebuild_rebinds_mcp_and_reconciliation_to_current_writer(monkeypatch):
         await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
+    assert all(source.stopped for source in sources)
+
+
+def test_ledger_construction_failure_stops_source(monkeypatch):
+    import simex.exchange.runtime as runtime
+
+    class BrokenLedger:
+        def __init__(self, dsn, *, metrics=None):
+            raise RuntimeError("ledger unavailable")
+
+    monkeypatch.setattr(runtime, "SyncLedger", BrokenLedger)
+    source = FakeSource()
+    settings = RunnerSettings(ledger_dsn="fake", pairs=("BTC-USD",))
+
+    async def scenario():
+        group = LiveRuntimeGroup(settings, RunnerMetrics(), lambda: source)
+        try:
+            await group.run()
+        except RuntimeError as exc:
+            assert str(exc) == "ledger unavailable"
+
+    asyncio.run(scenario())
+    assert source.stopped
 
 
 def test_mcp_requires_environment_risk_limits():
@@ -177,7 +214,7 @@ def test_mcp_requires_environment_risk_limits():
         ledger_dsn=None,
         mcp_port=8765,
     )
-    group = LiveRuntimeGroup(settings, RunnerMetrics(), lambda: object())
+    group = LiveRuntimeGroup(settings, RunnerMetrics(), FakeSource)
 
     try:
         asyncio.run(group.run())

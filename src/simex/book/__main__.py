@@ -15,6 +15,7 @@ import signal
 import valkey.asyncio as valkey
 from prometheus_client import start_http_server
 
+from simex.env import load_environment
 from simex.ingest.backoff import Backoff
 from simex.ingest.control import KafkaResyncRequester
 
@@ -27,6 +28,7 @@ log = logging.getLogger("simex.book")
 
 
 async def main() -> None:
+    load_environment(log)
     settings = BookSettings.from_env()
     metrics = BookMetrics()
     start_http_server(settings.metrics_port, registry=metrics.registry)
