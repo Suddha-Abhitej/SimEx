@@ -136,6 +136,7 @@ class AccountMetrics:
     fee_drag: Decimal | None
     equity_curve: tuple[EquityPoint, ...]
     returns: tuple[Decimal, ...]
+    return_timestamps: tuple[int, ...]
     missing_marks: tuple[tuple[int, str], ...]
     computable: bool
 
@@ -159,6 +160,7 @@ class AccountMetrics:
                 {"ts_ns": point.ts_ns, "equity": str(point.equity)} for point in self.equity_curve
             ],
             "returns": [str(value) for value in self.returns],
+            "return_timestamps": list(self.return_timestamps),
             "missing_marks": [
                 {"ts_ns": ts_ns, "asset": asset} for ts_ns, asset in self.missing_marks
             ],
@@ -298,15 +300,16 @@ def _metrics(
             curve.append(EquityPoint(ts_ns, value))
     initial = curve[0].equity if curve else None
     final = curve[-1].equity if curve else None
-    returns = (
+    return_points = (
         tuple(
-            (current.equity - previous.equity) / previous.equity
+            (current.ts_ns, (current.equity - previous.equity) / previous.equity)
             for previous, current in zip(curve, curve[1:], strict=False)
             if previous.equity != 0
         )
         if not missing
         else ()
     )
+    returns = tuple(value for _, value in return_points)
     return_value = (
         None
         if missing or initial in (None, Decimal(0)) or final is None
@@ -340,6 +343,7 @@ def _metrics(
         None if initial in (None, Decimal(0)) else fees[0] / initial,
         tuple(curve),
         returns,
+        tuple(ts_ns for ts_ns, _ in return_points),
         tuple(missing),
         bool(curve) and not missing,
     )
@@ -382,13 +386,13 @@ def _compare(
             "A complete Gemini mark is required at every period boundary; "
             "no interpolation is used.",
         )
-    sample = min(len(account.returns), len(baseline.returns))
+    baseline_returns = dict(zip(baseline.return_timestamps, baseline.returns, strict=True))
     excess = tuple(
-        agent - reference
-        for agent, reference in zip(
-            account.returns[:sample], baseline.returns[:sample], strict=False
-        )
+        agent - baseline_returns[ts_ns]
+        for ts_ns, agent in zip(account.return_timestamps, account.returns, strict=True)
+        if ts_ns in baseline_returns
     )
+    sample = len(excess)
     if sample < config.minimum_compute_samples:
         conclusion = "insufficient data to compute a significance interval or call a winner"
         interval = None

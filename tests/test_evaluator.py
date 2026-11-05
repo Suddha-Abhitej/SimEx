@@ -110,3 +110,44 @@ def test_baseline_beating_agent_is_reported_unflatteringly():
     assert comparison.confidence_interval is not None
     assert "baseline" in comparison.conclusion
     assert "n=3" in result.report
+
+
+def test_comparison_pairs_returns_by_timestamp_after_zero_equity():
+    # Agent equity: 10, 20, 0, 10, 20; baseline equity: 0, 10, 20, 30, 60.
+    # The agent skips the return ending at 180s; the baseline skips the one at 60s.
+    marks = PriceSeries(
+        [
+            PriceMark(product, index * 60 * NS, D(value))
+            for product, values in (
+                ("BTC-USD", ("110", "120", "100", "110", "120")),
+                ("ETH-USD", ("100", "110", "120", "130", "160")),
+            )
+            for index, value in enumerate(values)
+        ]
+    )
+    result = evaluate(
+        "agent",
+        [],
+        marks,
+        {"USD": D("-100"), "BTC": D("1")},
+        start_ns=0,
+        end_ns=300 * NS,
+        baselines={"baseline": ([], {"USD": D("-100"), "ETH": D("1")})},
+        config=EvaluationConfig(
+            minimum_compute_samples=2,
+            minimum_conclusion_samples=2,
+            bootstrap_replicates=100,
+            block_size=1,
+        ),
+    )
+
+    comparison = result.comparisons[0]
+    # Only 120s and 240s are shared, giving excess returns of -2 and 0.
+    assert result.account.returns == (D("1"), D("-1"), D("1"))
+    assert result.account.return_timestamps == (60 * NS, 120 * NS, 240 * NS)
+    assert result.to_dict()["account"]["return_timestamps"] == [60 * NS, 120 * NS, 240 * NS]
+    assert comparison.sample_size == 2
+    assert comparison.estimate == D("-1")
+    assert comparison.confidence_interval == (D("-2"), D("0"))
+    assert result.to_dict()["comparisons"][0]["sample_size"] == 2
+    assert "Comparison with baseline: n=2" in result.report
