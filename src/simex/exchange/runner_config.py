@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
+from simex.agents import BaselineSpec
+
 DEFAULT_PAIRS = ("BTC-USD", "ETH-USD", "SOL-USD")
 
 
@@ -40,6 +42,9 @@ class RunnerSettings:
     initial_usd: Decimal = Decimal("100000")
     mcp_port: int | None = None
     reconciliation_interval_seconds: float = 60.0
+    baseline_agents: tuple[BaselineSpec, ...] = ()
+    agent_cadence_seconds: float = 60.0
+    agent_dca_quote_amount: Decimal = Decimal("100")
 
     @property
     def lookback_seconds(self) -> float:
@@ -49,11 +54,22 @@ class RunnerSettings:
     def topics(self) -> tuple[str, str]:
         return (self.level2_topic, self.trades_topic)
 
+    @property
+    def account_ids(self) -> tuple[str, ...]:
+        return (self.account_id,) + tuple(spec.account_id for spec in self.baseline_agents)
+
     def __post_init__(self) -> None:
         if self.holdback_ms < 0:
             raise ValueError(f"EXCHANGE_MERGE_HOLDBACK_MS can't be negative ({self.holdback_ms})")
         if self.order_delay_ms < 0:
             raise ValueError(f"EXCHANGE_ORDER_DELAY_MS can't be negative ({self.order_delay_ms})")
+        account_ids = self.account_ids
+        if len(set(account_ids)) != len(account_ids):
+            raise ValueError("exchange account IDs must be unique")
+        if self.agent_cadence_seconds <= 0:
+            raise ValueError("EXCHANGE_AGENT_CADENCE_SECONDS must be positive")
+        if self.agent_dca_quote_amount <= 0:
+            raise ValueError("EXCHANGE_AGENT_DCA_QUOTE_AMOUNT must be positive")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> RunnerSettings:
@@ -65,6 +81,16 @@ class RunnerSettings:
             return value if value else str(default)
 
         pairs = tuple(p.strip().upper() for p in get("SIMEX_PAIRS", ",".join(d.pairs)).split(","))
+        specs = []
+        for item in get("EXCHANGE_BASELINE_AGENTS", "").split(","):
+            fields = [field.strip() for field in item.split(":")]
+            if not item.strip():
+                continue
+            if len(fields) not in (2, 3) or not fields[0] or not fields[1]:
+                raise ValueError("EXCHANGE_BASELINE_AGENTS entries are kind:account[:seed]")
+            specs.append(
+                BaselineSpec(fields[0], fields[1], int(fields[2]) if len(fields) == 3 else 0)
+            )
         return cls(
             pairs=tuple(p for p in pairs if p),
             kafka_bootstrap_servers=get("KAFKA_BOOTSTRAP_SERVERS", d.kafka_bootstrap_servers),
@@ -90,5 +116,12 @@ class RunnerSettings:
             ),
             reconciliation_interval_seconds=float(
                 get("EXCHANGE_RECONCILIATION_INTERVAL_SECONDS", d.reconciliation_interval_seconds)
+            ),
+            baseline_agents=tuple(specs),
+            agent_cadence_seconds=float(
+                get("EXCHANGE_AGENT_CADENCE_SECONDS", d.agent_cadence_seconds)
+            ),
+            agent_dca_quote_amount=Decimal(
+                get("EXCHANGE_AGENT_DCA_QUOTE_AMOUNT", d.agent_dca_quote_amount)
             ),
         )
