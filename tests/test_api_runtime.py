@@ -124,7 +124,7 @@ def test_api_task_failure_cancels_sibling_tasks_and_stops_source(monkeypatch):
     monkeypatch.setattr(FakeRunner, "run", idle)
     source = FakeSource()
     group = LiveRuntimeGroup(
-        RunnerSettings(ledger_dsn="fake", mcp_port=8765, api_port=8770),
+        RunnerSettings(pairs=("BTC-USD",), ledger_dsn="fake", mcp_port=8765, api_port=8770),
         RunnerMetrics(),
         lambda: source,
         risk_limits=api_tools().limits,

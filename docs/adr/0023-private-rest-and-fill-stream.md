@@ -16,8 +16,9 @@ in time, conversion of the runner's existing event consumer, and visible halt tr
 
 ## Decision
 
-Extract `ExchangeTools`, its JSON conversion and existing `RiskLimits` to `simex.exchange.tools`
-in a separate first commit. The unchanged Decimal P&L helper moves to `simex.exchange.pnl`.
+Extract `ExchangeTools` and its JSON conversion to `simex.exchange.tools` in a separate first
+commit. `RiskLimits` stays in `simex.exchange.risk` (ADR 0022), imported by the shared tools.
+The unchanged Decimal P&L helper moves to `simex.exchange.pnl`.
 Compatibility re-exports preserve existing MCP callers. This removes FastMCP from the import path
 of the shared operations. REST is a thin FastAPI transport over those same account-bound methods;
 both transports receive the same owner tools instance in `LiveRuntimeGroup`.
@@ -132,6 +133,10 @@ historical pagination. Longer missing intervals require an explicit portfolio re
 offline ledger reconciliation; they must not be labelled complete after reading a truncated list.
 Cross-restart replay requires ledger history rather than pretending an old numeric cursor is valid.
 
-The separate account-risk work in PR #91 is not included. Existing tools enforce the limits on
-this branch; the transport adds no competing risk implementation. Matching, gate, anti-cheat,
-fill production, evaluator and P&L conventions stay intact. No hard rule changes are needed.
+Account limits follow ADR 0022 and are authoritative in the account writer for both transports.
+The shared tools retain the `risk_limits_missing` guard and rejected orders' structured details;
+they do not repeat the writer's limit check. REST maps `position_limit` to HTTP 400 and
+`risk_limits_missing` to HTTP 503: a missing writer policy is a server wiring error, not a client
+error, and should be unreachable because the live runtime requires limits before starting.
+Matching, gate, anti-cheat, fill production, evaluator and P&L conventions stay intact. No hard
+rule changes are needed.

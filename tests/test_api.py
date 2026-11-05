@@ -11,6 +11,7 @@ from test_mcp import ClosedGate, make_tools, order_payload
 
 from simex.api import create_app, validate_api_configuration
 from simex.book.orderbook import BookState
+from simex.exchange.risk import RiskLimits
 from simex.exchange.runner_config import RunnerSettings
 from simex.ledger import LedgerHalted
 from simex.mcp import create_server
@@ -129,6 +130,47 @@ def test_routes_return_shared_tools_dicts_and_preserve_full_money_precision():
             client.delete("/v1/orders/by-client-id/second", headers=HEADERS).json()["status"]
             == "requested"
         )
+
+
+def test_rest_position_limit_refusal_includes_writer_reject_details():
+    tools = api_tools()
+    tools.writer.risk_limits = RiskLimits(
+        tools.limits.max_quantity, tools.limits.max_notional, {"BTC-USD": Decimal("0.15")}
+    )
+    # The first order is still pending: the authoritative writer counts its remaining exposure.
+    with TestClient(create_app(tools, token=TOKEN)) as client:
+        assert (
+            client.post("/v1/orders", headers=HEADERS, json=order_payload("first")).status_code
+            == 200
+        )
+        response = client.post("/v1/orders", headers=HEADERS, json=order_payload("breach"))
+    assert response.status_code == 400
+    body = response.json()
+    assert body["ok"] is False
+    assert body["reason"] == "position_limit"
+    details = {
+        "rule": "max_position",
+        "product_id": "BTC-USD",
+        "limit": "0.15",
+        "attempted": "0.2",
+        "minimum": "-0.15",
+        "maximum": "0.15",
+        "side": "buy",
+    }
+    assert {key: body[key] for key in details} == details
+    assert body["order"]["reject_details"] == details
+    assert body["order"]["status"] == "rejected"
+    no_floats(body)
+
+
+def test_rest_missing_writer_risk_policy_is_a_server_misconfiguration():
+    tools = api_tools()
+    tools.writer.risk_limits = None
+    with TestClient(create_app(tools, token=TOKEN)) as client:
+        response = client.post("/v1/orders", headers=HEADERS, json=order_payload())
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "reason": "risk_limits_missing"}
+    assert not tools.writer.orders
 
 
 @pytest.mark.parametrize(

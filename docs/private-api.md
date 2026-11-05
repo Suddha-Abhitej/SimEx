@@ -5,7 +5,9 @@ writer, matching engines and both optional transports. There is no separate API 
 
 Set `EXCHANGE_API_PORT` to an unused local port, `EXCHANGE_API_TOKEN` to your private secret and
 `EXCHANGE_LEDGER_DSN` to the existing ledger. Keep the token in the local environment, never in git.
-Existing `EXCHANGE_MCP_MAX_QUANTITY_<PAIR>` and `EXCHANGE_MCP_MAX_NOTIONAL_<PAIR>` limits must be set.
+Explicit `EXCHANGE_MAX_QUANTITY_<PAIR>`, `EXCHANGE_MAX_NOTIONAL_<PAIR>` and
+`EXCHANGE_MAX_POSITION_<PAIR>` limits must be set. The writer enforces them for both transports;
+the former MCP quantity/notional names remain compatibility aliases (ADR 0022).
 An absent API port disables it; an enabled API without a token or ledger refuses startup.
 It always binds `127.0.0.1`. Remote clients need your private access layer or SSH tunnel.
 
@@ -47,6 +49,9 @@ Responses are the same dicts as MCP, including full portfolio P&L. Act on `ok` a
 HTTP statuses provide a convenience: 400 for validation, 404 for unknown resources, 409 for account,
 writer or ledger halts, and 503 for unavailable books/backends. Unknown refusal reasons remain
 structured HTTP 400 responses rather than turning into server errors.
+Position-limit refusals include the writer's `limit`, `attempted` and other `reject_details`,
+also retained inside the rejected order. `risk_limits_missing` is HTTP 503 and means server
+misconfiguration; the live runtime refuses to start without its risk policy.
 
 ## Connect, checkpoint and resume
 

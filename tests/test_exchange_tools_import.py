@@ -20,6 +20,7 @@ def test_shared_tools_and_api_import_without_loading_mcp_transport():
 
 def test_mcp_compatibility_exports_are_the_same_objects():
     from simex.exchange.pnl import position_pnl
+    from simex.exchange.risk import RiskLimits as AccountRiskLimits
     from simex.exchange.tools import ExchangeTools, RiskLimits
     from simex.mcp import ExchangeTools as MCPTools
     from simex.mcp import RiskLimits as MCPLimits
@@ -27,4 +28,5 @@ def test_mcp_compatibility_exports_are_the_same_objects():
 
     assert MCPTools is ExchangeTools
     assert MCPLimits is RiskLimits
+    assert RiskLimits is AccountRiskLimits
     assert mcp_pnl is position_pnl
