@@ -186,3 +186,28 @@ tests:
             exp_annotations:
               summary: "Ledger reconciliation is stale"
               description: "No successful ledger reconciliation has completed within two configured intervals. Check the reconciliation task, Postgres and the ledger metrics endpoint."
+
+  - interval: 1m
+    input_series:
+      - series: 'simex_ledger_reconciliation_runs_total'
+        values: '0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ExchangeLedgerReconciliationNeverStarted
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ExchangeLedgerReconciliationNeverStarted
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "Ledger reconciliation has not started"
+              description: "No ledger reconciliation scan has completed since startup. Check the reconciliation task, Postgres and the ledger metrics endpoint."
+
+  - interval: 1m
+    input_series:
+      - series: 'simex_ledger_reconciliation_runs_total'
+        values: '0 0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ExchangeLedgerReconciliationNeverStarted
+        exp_alerts: []

@@ -80,3 +80,13 @@ groups:
           description: >-
             No successful ledger reconciliation has completed within two configured intervals.
             Check the reconciliation task, Postgres and the ledger metrics endpoint.
+      - alert: ExchangeLedgerReconciliationNeverStarted
+        expr: simex_ledger_reconciliation_runs_total == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Ledger reconciliation has not started"
+          description: >-
+            No ledger reconciliation scan has completed since startup. Check the reconciliation
+            task, Postgres and the ledger metrics endpoint.
