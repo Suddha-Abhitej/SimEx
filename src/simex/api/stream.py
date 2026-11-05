@@ -76,9 +76,10 @@ async def stream_fills(
                     await send({"type": "error", "reason": "bad_from_seq"})
                     await close(1008, "from_seq must be a nonnegative integer")
                     return
-                if (cursor > 0 and stream_id != writer.stream_id) or (
-                    stream_id is not None and stream_id != writer.stream_id
-                ):
+                if cursor > 0 and not stream_id:
+                    await gap("stream_id_required", cursor)
+                    return
+                if stream_id is not None and stream_id != writer.stream_id:
                     await gap("stream_changed", cursor)
                     return
                 if cursor > writer.event_sequence:

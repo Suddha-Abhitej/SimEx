@@ -76,7 +76,7 @@ join receives an immediate halt frame. Halt recovery is explicit even when there
 Market-data gate state is still represented by the shared order refusal reasons, not these frames.
 
 An expired, invalidated or future cursor produces `type: gap`, a `reason` (`events_evicted`,
-`stream_changed` or `cursor_ahead`), the current writer ID/buffer boundaries and
+`stream_id_required`, `stream_changed` or `cursor_ahead`), the current writer ID/buffer boundaries and
 `history: /v1/fills`, then closes with code 1008. Reconcile committed fills and current portfolio;
 never treat a gap as a complete stream. History defaults to 100 and accepts at most 1,000 fills.
 If that cannot cover the missing interval, a portfolio resnapshot or offline ledger reconciliation
@@ -91,6 +91,9 @@ The rejection-heavy synthetic experiment in [ADR 0023](adr/0023-private-rest-and
 observed about 1,000 events/second and only **0.166659 minutes** of retention despite zero fills.
 That is an explicit synthetic load, not a prediction of your live traffic. At another observed
 rate, estimated retention in minutes is buffer capacity divided by events per minute.
+The owner's observed 14-hour baseline run had roughly 150 total writer events (about 0.003/second),
+implying roughly 39 days at that average rate. This estimate and the ten-second synthetic example
+illustrate the range; bursts, restarts and a different cadence can shorten either absence window.
 
 A blocked send times out and closes with code 1013, with instructions to reconnect using
 `from_seq` and `stream_id`. A client that falls behind eviction gets a gap. The runner's rejection

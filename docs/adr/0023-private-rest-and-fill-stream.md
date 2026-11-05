@@ -61,8 +61,9 @@ fill settlement path are unchanged.
 The first frame is `hello`, carrying `stream_id`, the current sequence and initial writer/account
 halt flags. A live-only connection starts at that sequence. `from_seq=N&stream_id=ID` replays
 events strictly after N, then uses the same cursor for live delivery. A positive cursor requires
-the matching writer ID. An absent/different ID, a cursor ahead of the writer, or an evicted cursor
-produces an explicit `gap` with the cause and `/v1/fills`, then closes with code 1008. `from_seq=0`
+the matching writer ID. A missing ID produces `stream_id_required`; a supplied different ID produces
+`stream_changed`. A cursor ahead of the writer or an evicted cursor also produces an explicit
+`gap` with the cause and `/v1/fills`, then closes with code 1008. `from_seq=0`
 requests all retained history only when the beginning is still available. Omitting a cursor starts
 live delivery. A `hello` sequence is the current head, not proof that replay has been delivered.
 
@@ -79,6 +80,9 @@ to reconnect using `stream_id` and `from_seq`. Eviction during live delivery als
 The journal alone has a small lock for numbering, snapshots and wakeups, because reconciliation
 already invokes account halt methods from its existing worker thread. This does not make order
 submission thread-safe or permit it from a threadpool.
+If scheduling a wakeup fails because its loop has closed, drop that watcher and continue retaining
+the event and notifying other clients. Notification failure must not propagate into submission,
+committed fill settlement, or the original ledger exception while a writer halts.
 
 The runner also consumes by sequence, replacing its positional slice and length cursor. If it
 falls behind, it counts the number of lost events in
@@ -87,6 +91,8 @@ exactly once. Lost rejections cannot be reconstructed from the notification buff
 visible. Existing determinism tests still compare the complete serialized event sequence, with
 explicit assertions that their test histories were not evicted. The random writer ID is outside
 that deterministic event payload.
+The fill-accuracy replay tool also consumes by sequence, but aborts with an explicit invalid-results
+error if eviction outruns it. It cannot continue a measurement with missing events.
 
 ### Provisional operational settings and retention measurement
 
@@ -104,6 +110,14 @@ It excludes Postgres and is neither a throughput benchmark nor a production even
 The tool can be rerun at an intended cadence; actual retention changes with aggregate event rate.
 For example, capacity / observed events per minute gives the estimated absence window. Measure
 again on the live deployment; the new API has not been deployed as part of this change.
+
+For comparison, the owner-observed 14-hour baseline run produced roughly **150 writer events**,
+including order lifecycle events, not just its 48 fills: about **0.003 events/second**. At that
+observed average, 10,000 events correspond to roughly **56,000 minutes (39 days, about 5.6 weeks)**
+of retention (`10000 / 150 * 14 hours`). This is an estimate from that run's approximate total,
+not a newly measured stream or a guarantee about bursts or future cadence. The observed quiet-run
+estimate and the synthetic rejection-heavy result therefore span about ten seconds to several
+weeks; neither is a universal bound, and faster event rates can retain less than ten seconds.
 
 ## Consequences
 

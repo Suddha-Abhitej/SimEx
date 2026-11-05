@@ -40,12 +40,18 @@ class EventJournal:
         with self._lock:
             self._sequence += 1
             self.events.append({"seq": self._sequence, "type": kind, **fields})
-            for watcher in self._watchers:
+            for watcher in tuple(self._watchers):
                 if not watcher.pending:
                     watcher.pending = True
                     # At most one scheduled notification per socket, including when a worker
                     # emits many halt transitions while the exchange loop is blocked.
-                    watcher.loop.call_soon_threadsafe(self._notify, watcher)
+                    try:
+                        watcher.loop.call_soon_threadsafe(self._notify, watcher)
+                    except RuntimeError:
+                        # A closed notification loop cannot fail trading or replace the
+                        # ledger exception that triggered a halt. Keep the event and notify
+                        # the remaining watchers; this socket no longer has a working loop.
+                        self._watchers.discard(watcher)
 
     def _notify(self, watcher: _Watcher) -> None:
         with self._lock:

@@ -148,16 +148,19 @@ def test_eviction_of_order_lifecycle_events_also_invalidates_replay():
             assert socket.receive_json()["reason"] == "events_evicted"
 
 
-@pytest.mark.parametrize("identity", ["missing", "old", "matching-ahead"])
+@pytest.mark.parametrize("identity", ["missing", "empty", "old", "matching-ahead"])
 def test_resume_rejects_writer_rebuilds_missing_identity_and_future_cursors(identity):
     old = stream_tools().writer
     new = stream_tools().writer
     emit_fill(new)
     tools = ExchangeTools("owner", new, {}, stream_tools().limits)
     query = "from_seq=1"
-    expected = "stream_changed"
-    if identity == "old":
+    expected = "stream_id_required"
+    if identity == "empty":
+        query += "&stream_id="
+    elif identity == "old":
         query += f"&stream_id={old.stream_id}"
+        expected = "stream_changed"
     elif identity == "matching-ahead":
         query = f"from_seq=2&stream_id={new.stream_id}"
         expected = "cursor_ahead"
