@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
 from simex.agents import BaselineSpec
+
+from .events import DEFAULT_EVENT_BUFFER_SIZE
 
 DEFAULT_PAIRS = ("BTC-USD", "ETH-USD", "SOL-USD")
 
@@ -41,6 +44,10 @@ class RunnerSettings:
     account_id: str = "owner"
     initial_usd: Decimal = Decimal("100000")
     mcp_port: int | None = None
+    api_port: int | None = None
+    event_buffer_size: int = DEFAULT_EVENT_BUFFER_SIZE
+    api_heartbeat_seconds: float = 15.0
+    api_send_timeout_seconds: float = 10.0
     reconciliation_interval_seconds: float = 60.0
     baseline_agents: tuple[BaselineSpec, ...] = ()
     agent_cadence_seconds: float = 60.0
@@ -59,6 +66,24 @@ class RunnerSettings:
         return (self.account_id,) + tuple(spec.account_id for spec in self.baseline_agents)
 
     def __post_init__(self) -> None:
+        if self.api_port is not None and (
+            isinstance(self.api_port, bool)
+            or not isinstance(self.api_port, int)
+            or not 1 <= self.api_port <= 65535
+        ):
+            raise ValueError("EXCHANGE_API_PORT must be between 1 and 65535")
+        if (
+            isinstance(self.event_buffer_size, bool)
+            or not isinstance(self.event_buffer_size, int)
+            or self.event_buffer_size <= 0
+        ):
+            raise ValueError("EXCHANGE_EVENT_BUFFER_SIZE must be a positive integer")
+        for name, value in (
+            ("EXCHANGE_API_HEARTBEAT_SECONDS", self.api_heartbeat_seconds),
+            ("EXCHANGE_API_SEND_TIMEOUT_SECONDS", self.api_send_timeout_seconds),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
         if self.holdback_ms < 0:
             raise ValueError(f"EXCHANGE_MERGE_HOLDBACK_MS can't be negative ({self.holdback_ms})")
         if self.order_delay_ms < 0:
@@ -113,6 +138,16 @@ class RunnerSettings:
             initial_usd=Decimal(get("EXCHANGE_INITIAL_USD", d.initial_usd)),
             mcp_port=(
                 int(env["EXCHANGE_MCP_PORT"]) if env.get("EXCHANGE_MCP_PORT", "").strip() else None
+            ),
+            api_port=(
+                int(env["EXCHANGE_API_PORT"]) if env.get("EXCHANGE_API_PORT", "").strip() else None
+            ),
+            event_buffer_size=int(get("EXCHANGE_EVENT_BUFFER_SIZE", d.event_buffer_size)),
+            api_heartbeat_seconds=float(
+                get("EXCHANGE_API_HEARTBEAT_SECONDS", d.api_heartbeat_seconds)
+            ),
+            api_send_timeout_seconds=float(
+                get("EXCHANGE_API_SEND_TIMEOUT_SECONDS", d.api_send_timeout_seconds)
             ),
             reconciliation_interval_seconds=float(
                 get("EXCHANGE_RECONCILIATION_INTERVAL_SECONDS", d.reconciliation_interval_seconds)

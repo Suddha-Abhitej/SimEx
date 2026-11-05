@@ -91,7 +91,7 @@ def test_malformed_requests_are_refused_without_a_record(change, reason):
     with pytest.raises(OrderError) as raised:
         w.submit("alice", {**limit(), **change}, T0)
     assert raised.value.reason == reason
-    assert w.orders == {} and w.events == []
+    assert w.orders == {} and list(w.events) == []
 
 
 def test_a_market_order_cannot_carry_a_price():

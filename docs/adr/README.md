@@ -27,3 +27,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0020](0020-evaluator-price-series-and-significance.md) | Gemini marks and moving-block significance for private evaluation | Accepted |
 | [0021](0021-live-portfolio-weighted-average-pnl.md) | Live portfolio P&L with weighted-average cost and separate fees | Accepted |
 | [0022](0022-account-order-and-position-risk-limits.md) | Account order limits and independent same-side position exposure | Accepted |
+| [0023](0023-private-rest-and-fill-stream.md) | Private REST API and bounded, resumable committed-fill notifications | Accepted |

@@ -144,7 +144,7 @@ class Run:
         self.first_maker_fill: dict[str, int] = {}
         self.taker_on_arrival: set[str] = set()
         self.markouts = Markouts()
-        self.seen = 0
+        self.seen_seq = 0
         self.ids = 0
         self.closed_seconds: Counter[tuple[str, str]] = Counter()
         self._gate_seen: dict[str, tuple[int, str]] = {}
@@ -173,8 +173,14 @@ class Run:
             self._probe(engine, now)
 
     def _collect_fills(self) -> None:
-        events = self.writer.events
-        for event in events[self.seen :]:
+        oldest, latest, events = self.writer.events_after(self.seen_seq)
+        missed = oldest - self.seen_seq - 1
+        if missed > 0:
+            raise RuntimeError(
+                f"{self.name}: {missed} writer events evicted after sequence {self.seen_seq} "
+                f"(oldest retained {oldest}); fill accuracy results invalid"
+            )
+        for event in events:
             if event["type"] != "fill":
                 continue
             fill = event["fill"]
@@ -187,7 +193,7 @@ class Run:
             self.first_maker_fill.setdefault(order_id, fill["ts_ns"])
             key = ("sim", fill["product_id"], fill["side"], Decimal(fill["price"]))
             self.markouts.add(fill["product_id"], key, fill["side"], key[3], fill["ts_ns"])
-        self.seen = len(events)
+        self.seen_seq = latest
 
     def _probe(self, engine: PairEngine, now: int) -> None:
         product = engine.product_id

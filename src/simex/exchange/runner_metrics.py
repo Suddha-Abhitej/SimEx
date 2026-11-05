@@ -103,6 +103,11 @@ class RunnerMetrics:
             ["product_id", "reason"],
             registry=r,
         )
+        self.writer_event_gaps = Counter(
+            "simex_exchange_writer_event_gaps_total",
+            "Writer events evicted before the rejection metric consumer could observe them",
+            registry=r,
+        )
         self.lag_baseline = Gauge(
             "simex_exchange_lag_baseline_established",
             "1 after ten minutes of level2 lag samples establish the rolling baseline",
