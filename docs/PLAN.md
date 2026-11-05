@@ -127,7 +127,7 @@ property-based testing and Next.js.
 | Exchange core | Python asyncio (one writer per pair), FastAPI (REST + WebSocket), Pydantic, Python Decimal for all money | No race conditions; never floats for money |
 | Ledger | PostgreSQL append-only events, asyncpg, transactional outbox to Kafka | Exactly-once fills, provable balances |
 | Features | Apache Flink (Flink SQL / PyFlink) or Python jobs first, Valkey | Event-time windows |
-| Plug-ins | MCP Python SDK, Python client SDK on PyPI, hashed API keys, Valkey rate limiting | Zero-code access for MCP clients |
+| Plug-ins | MCP Python SDK, private Python client SDK installed from the checkout, hashed API keys, Valkey rate limiting | Zero-code access for MCP clients |
 | Agents | LLM gateway pattern (or LiteLLM), Anthropic / OpenAI / Gemini SDKs, Ollama | Cost caps per agent |
 | Evaluation | Polars or pandas, NumPy, SciPy bootstrap tests | Significance vs baselines |
 | Dashboard | Next.js + TypeScript (or Streamlit), TradingView Lightweight Charts (open source), behind Cloudflare Access | Private trading-style charts |

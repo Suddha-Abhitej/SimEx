@@ -75,6 +75,9 @@ flowchart TD
 
 Full task lists, risks and metrics: [`docs/PLAN.md`](docs/PLAN.md).
 
+Connect a bot with the [Python SDK quickstart](docs/quickstart.md). See the
+[private API contract](docs/private-api.md) for the wire protocol.
+
 ## Tech stack
 
 Python 3.12 · Apache Kafka · Apache Flink · FastAPI · PostgreSQL · Valkey (Redis-compatible) · Parquet + Iceberg ·
@@ -95,8 +98,8 @@ simex/
 │   ├── agents/         Baseline and LLM reference agents
 │   ├── evaluator/      Scoring against baselines
 │   ├── mcp/            MCP server
+│   ├── client/         Private synchronous Python SDK
 │   └── playground/     Replay Playground (v1.1)
-├── sdk/python/         Client SDK
 ├── web/                Private dashboard
 ├── infra/              Prometheus config, Terraform (Cloudflare, Azure)
 ├── docs/               Plan and architecture decision records
