@@ -14,7 +14,12 @@ from simex.exchange import (
     Liquidity,
 )
 from simex.exchange.orders import FillCause
-from simex.ledger import SyncLedger
+from simex.ledger import (
+    LedgerMetrics,
+    PostgresReconciliationStore,
+    ReconciliationJob,
+    SyncLedger,
+)
 from simex.mcp import ExchangeTools, RiskLimits
 
 
@@ -129,4 +134,32 @@ def test_reasoning_and_history_survive_ledger_restart():
             ledger.close()
         if restarted is not None:
             restarted.close()
+        asyncio.run(_drop_schema(dsn, schema))
+
+
+def test_multiple_accounts_reconcile_exactly():
+    dsn = _dsn_or_skip()
+    schema = f"mcp_multi_{uuid.uuid4().hex}"
+    asyncio.run(_create_schema(dsn, schema))
+    schema_dsn = _schema_dsn(dsn, schema)
+    ledger = None
+    store = None
+    try:
+        ledger = SyncLedger(schema_dsn)
+        ledger.migrate()
+        writer = AccountWriter(
+            DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), 200_000_000, ledger=ledger
+        )
+        for account in ("buyhold", "dca", "random", "momentum"):
+            writer.deposit(account, "USD", Decimal("1000"), f"seed:{account}:USD:v1")
+        store = PostgresReconciliationStore(schema_dsn)
+        job = ReconciliationJob(store, LedgerMetrics())
+        for account in ("buyhold", "dca", "random", "momentum"):
+            job.register_writer(account, writer)
+        assert job.run_once() == ()
+    finally:
+        if store is not None:
+            store.close()
+        if ledger is not None:
+            ledger.close()
         asyncio.run(_drop_schema(dsn, schema))

@@ -194,13 +194,23 @@ class ExchangeRunner:
 
     async def start(self) -> None:
         if self.ledger is not None:
-            self.writer.restore(self.settings.account_id)
-            if self.settings.account_id not in self.writer.applied_sequences:
+            for account_id in self.settings.account_ids:
+                self.writer.restore(account_id)
+            for account_id in self.settings.account_ids:
+                if account_id not in self.writer.applied_sequences:
+                    self.writer.deposit(
+                        account_id,
+                        "USD",
+                        self.settings.initial_usd,
+                        f"seed:{account_id}:USD:v1",
+                    )
+        elif self.settings.baseline_agents:
+            for account_id in self.settings.account_ids[1:]:
                 self.writer.deposit(
-                    self.settings.account_id,
+                    account_id,
                     "USD",
                     self.settings.initial_usd,
-                    f"seed:{self.settings.account_id}:USD:v1",
+                    f"seed:{account_id}:USD:v1",
                 )
         partitions = await self.source.start()
         for topic, parts in partitions.items():

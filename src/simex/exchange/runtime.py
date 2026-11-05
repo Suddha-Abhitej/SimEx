@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from typing import Any
 
+from simex.agents import BaselineAgent
 from simex.ledger import (
     LedgerMetrics,
     PostgresReconciliationStore,
@@ -17,6 +19,8 @@ from simex.mcp import ExchangeTools, RiskLimits, run_server_async
 from .runner import ExchangeRunner
 from .runner_config import RunnerSettings
 from .runner_metrics import RunnerMetrics
+
+log = logging.getLogger(__name__)
 
 
 class LiveRuntimeGroup:
@@ -49,18 +53,34 @@ class LiveRuntimeGroup:
         self.tools: ExchangeTools | None = None
         self.store: PostgresReconciliationStore | None = None
         self.tasks: list[asyncio.Task[Any]] = []
+        self.agents: list[BaselineAgent] = []
+
+    async def _run_agent(self, agent: BaselineAgent) -> None:
+        try:
+            await agent.run_forever()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.metrics.agent_errors.labels(agent.spec.kind, agent.spec.account_id).inc()
+            logging.getLogger(__name__).exception(
+                "baseline agent %s for %s stopped after an error",
+                agent.spec.kind,
+                agent.spec.account_id,
+            )
 
     async def run(self) -> None:
         self.source = self.source_factory()
         try:
-            if self.settings.mcp_port is not None and self.risk_limits is None:
+            if (
+                self.settings.mcp_port is not None or self.settings.baseline_agents
+            ) and self.risk_limits is None:
                 suffixes = self.settings.pairs
                 variables = ", ".join(
                     f"EXCHANGE_MCP_MAX_{kind}_{product.replace('-', '_')}"
                     for product in suffixes
                     for kind in ("QUANTITY", "NOTIONAL")
                 )
-                raise ValueError(f"EXCHANGE_MCP_PORT requires risk limits; set {variables}")
+                raise ValueError(f"MCP or baseline agents require risk limits; set {variables}")
             if self.settings.ledger_dsn is not None:
                 self.ledger = SyncLedger(self.settings.ledger_dsn, metrics=self.ledger_metrics)
                 self.ledger.migrate()
@@ -74,7 +94,8 @@ class LiveRuntimeGroup:
                     self.ledger_metrics,
                     interval_seconds=self.settings.reconciliation_interval_seconds,
                 )
-                self.reconciliation.register_writer(self.settings.account_id, self.runner.writer)
+                for account_id in self.settings.account_ids:
+                    self.reconciliation.register_writer(account_id, self.runner.writer)
             self.tasks.append(asyncio.create_task(self.runner.run(), name="exchange-runner"))
             if self.reconciliation is not None:
                 self.tasks.append(
@@ -91,6 +112,32 @@ class LiveRuntimeGroup:
                     asyncio.create_task(
                         self.server_runner(self.tools, port=self.settings.mcp_port),
                         name="mcp-server",
+                    )
+                )
+            self.agents = [
+                BaselineAgent(
+                    spec,
+                    ExchangeTools(
+                        spec.account_id,
+                        self.runner.writer,
+                        self.runner.engines,
+                        self.risk_limits,
+                    ),
+                    cadence_seconds=self.settings.agent_cadence_seconds,
+                    dca_quote_amount=self.settings.agent_dca_quote_amount,
+                )
+                for spec in self.settings.baseline_agents
+            ]
+            for agent in self.agents:
+                log.info(
+                    "starting baseline agent %s for account %s with seed %d",
+                    agent.spec.kind,
+                    agent.spec.account_id,
+                    agent.spec.seed,
+                )
+                self.tasks.append(
+                    asyncio.create_task(
+                        self._run_agent(agent), name=f"agent-{agent.spec.account_id}"
                     )
                 )
             done, pending = await asyncio.wait(self.tasks, return_when=asyncio.FIRST_EXCEPTION)

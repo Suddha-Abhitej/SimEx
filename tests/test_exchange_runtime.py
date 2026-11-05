@@ -226,3 +226,23 @@ def test_mcp_requires_environment_risk_limits():
 
     assert "EXCHANGE_MCP_MAX_QUANTITY_BTC_USD" in message
     assert "EXCHANGE_MCP_MAX_NOTIONAL_BTC_USD" in message
+
+
+def test_agent_failure_is_contained_and_counted():
+    class BrokenAgent:
+        class Spec:
+            kind = "random"
+            account_id = "random"
+
+        spec = Spec()
+
+        async def run_forever(self):
+            raise RuntimeError("agent failed")
+
+    async def scenario():
+        group = LiveRuntimeGroup(RunnerSettings(), RunnerMetrics(), FakeSource)
+        task = asyncio.create_task(group._run_agent(BrokenAgent()))
+        await task
+        assert group.metrics.agent_errors.labels("random", "random")._value.get() == 1
+
+    asyncio.run(scenario())
