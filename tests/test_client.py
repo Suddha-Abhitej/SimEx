@@ -19,6 +19,7 @@ from test_api import TOKEN, api_tools, no_floats
 from test_api_stream import emit_fill, stream_tools
 from test_portfolio_pnl import live_tools, trade
 from test_portfolio_pnl import pnl_dsn as pnl_dsn
+from websockets.exceptions import ConnectionClosedOK
 
 from simex.api import create_app
 from simex.api.server import _SupervisedServer
@@ -28,12 +29,13 @@ from simex.marketdata import BookUpdate
 
 
 class WireProbe:
-    def __init__(self, app, *, future_frame=False, after_order=None):
+    def __init__(self, app, *, future_frame=False, after_order=None, close_stream=False):
         self.app = app
         self.requests = []
         self.streams = 0
         self.future_frame = future_frame
         self.after_order = after_order
+        self.close_stream = close_stream
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "websocket":
@@ -54,6 +56,18 @@ class WireProbe:
 
         async def write(message):
             await send(message)
+            if (
+                self.close_stream
+                and message["type"] == "websocket.send"
+                and json.loads(message["text"])["type"] == "hello"
+            ):
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": 1000,
+                        "reason": "synthetic clean server close",
+                    }
+                )
             if (
                 self.future_frame
                 and message["type"] == "websocket.send"
@@ -77,12 +91,13 @@ class WireProbe:
 
 
 @contextmanager
-def serving(tools=None, *, future_frame=False, after_order=None):
+def serving(tools=None, *, future_frame=False, after_order=None, close_stream=False):
     tools = tools if tools is not None else api_tools()
     probe = WireProbe(
         create_app(tools, token=TOKEN, heartbeat_seconds=0.02, send_timeout_seconds=1),
         future_frame=future_frame,
         after_order=after_order,
+        close_stream=close_stream,
     )
     server = _SupervisedServer(
         uvicorn.Config(
@@ -333,6 +348,7 @@ def test_first_subscription_is_live_even_after_retention_has_evicted_history():
         assert stream.checkpoint.seq == 8
         stream.ack(frame)
         assert stream.checkpoint.seq == 9
+        assert not stream.checkpoint.applied_fill_ids
 
 
 @pytest.mark.parametrize(
@@ -382,8 +398,10 @@ def test_replay_below_hello_watermark_batch_ack_and_restored_deduplication():
             assert checkpoint.seq == 4  # Receipt alone acknowledges nothing.
             stream.ack(seven)
             assert checkpoint.seq == 4
+            assert checkpoint.applied_fill_ids == {"seven"}
             stream.ack(five)
             assert checkpoint.seq == 5
+            assert checkpoint.applied_fill_ids == {"seven"}
             assert receive(stream, "heartbeat")["seq"] == 8
             assert checkpoint.seq == 5  # Neither hello nor heartbeat can jump six.
             restored = copy.deepcopy(checkpoint)
@@ -394,9 +412,10 @@ def test_replay_below_hello_watermark_batch_ack_and_restored_deduplication():
             assert replayed["fill"]["fill_id"] == "six"
             assert next(resumed)["type"] == "heartbeat"  # seven was already applied.
             assert restored.seq == 5
+            assert restored.applied_fill_ids == {"seven"}
             resumed.ack(replayed)
             assert restored.seq == 8
-            assert restored.applied_fill_ids == {"five", "six", "seven"}
+            assert not restored.applied_fill_ids
 
 
 def test_explicit_replay_zero_and_duplicate_unacknowledged_fill_id():
@@ -415,6 +434,41 @@ def test_explicit_replay_zero_and_duplicate_unacknowledged_fill_id():
             stream.ack(frame)
             assert checkpoint.seq == 2
             stream.ack(frame)  # Repeated acknowledgement is harmless.
+
+
+def test_ordered_application_prunes_ids_over_repeated_batches():
+    tools = stream_tools()
+    with serving(tools) as api, Client(api.url, TOKEN) as client, client.stream() as stream:
+        next(stream)
+        for batch in range(20):
+            for offset in range(3):
+                api.call(emit_fill, tools.writer, fill_id=f"batch-{batch}-{offset}")
+            frames = [receive(stream, "fill") for _ in range(3)]
+            stream.ack(frames[2])
+            assert stream.checkpoint.applied_fill_ids == {f"batch-{batch}-2"}
+            stream.ack(frames[0])
+            assert stream.checkpoint.applied_fill_ids == {f"batch-{batch}-2"}
+            stream.ack(frames[1])
+            assert stream.checkpoint.seq == frames[2]["seq"]
+            assert not stream.checkpoint.applied_fill_ids
+
+
+def test_clean_server_close_raises_in_sdk_and_preserves_checkpoint():
+    with serving(close_stream=True) as api, Client(api.url, TOKEN) as client:
+        with client.stream() as stream:
+            next(stream)
+            checkpoint = copy.deepcopy(stream.checkpoint)
+            with pytest.raises(ConnectionClosedOK):
+                next(stream)
+            assert stream.checkpoint == checkpoint
+
+
+def test_hello_bot_reports_clean_server_close_without_traceback(monkeypatch):
+    with serving(close_stream=True) as api:
+        monkeypatch.setenv("EXCHANGE_API_PORT", api.url.rsplit(":", 1)[1])
+        monkeypatch.setenv("EXCHANGE_API_TOKEN", TOKEN)
+        with pytest.raises(SystemExit, match="synthetic clean server close"):
+            runpy.run_path("examples/hello_bot.py", run_name="__main__")
 
 
 def test_halts_and_future_frame_type_reach_the_caller():

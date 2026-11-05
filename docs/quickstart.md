@@ -177,9 +177,15 @@ head, **not** a delivery checkpoint: a replayed fill may have a smaller seq. Res
 Checkpoint state is in memory. Persist `stream_id`, `seq` and `applied_fill_ids` with application state
 for crash recovery. Exactly-once application across crashes requires atomic persistence together,
 or an application idempotent by fill ID. The SDK cannot transact over your external store. Applied
-IDs grow with processed fills; outstanding tracking grows with unacknowledged fills. Do not discard
-IDs your recovery plan still needs. Use one active iterator per checkpoint, on one thread.
-Reopening is explicit; there is no reconnect loop. Socket failures propagate with progress retained.
+IDs are pruned as the contiguous cursor passes them; only out-of-order acknowledgements beyond
+the cursor remain. Outstanding tracking grows with unacknowledged fills. Use one active iterator
+per checkpoint, on one thread. Reopening is explicit; there is no reconnect loop.
+
+The SDK raises on every disconnect, including `websockets.exceptions.ConnectionClosedOK` for a
+clean server close, rather than silently ending a bot's fill loop. Acknowledged progress is retained.
+The example catches `ConnectionClosed`, reports the close reason and exits with a nonzero status
+without a traceback. Closing the example does not undo an accepted order; inspect its outcome
+before submitting a new decision.
 
 Hello flags, heartbeats and halt/recovery frames are visible. Check hello's initial halt flags before
 submitting. Halts describe account/writer state, not market-data gate state. **Unknown frame types

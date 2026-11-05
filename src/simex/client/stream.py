@@ -17,7 +17,7 @@ class Checkpoint:
     """Persist alongside application state. None means a first, live subscription.
 
     Use seq=0 explicitly to request replay from the writer's beginning. The applied ID set
-    includes out-of-order acknowledgements beyond seq and grows with applied fills.
+    retains only out-of-order acknowledgements beyond seq until the cursor passes them.
     """
 
     stream_id: str | None = None
@@ -106,7 +106,9 @@ class FillStream(Iterator[dict]):
                 duplicate = (
                     fill_id in self.checkpoint.applied_fill_ids or fill_id in self._inflight_ids
                 )
-                if not duplicate:
+                # Restored applied IDs still need a queue entry so closing an earlier hole
+                # also prunes them when the watermark passes their replayed sequence.
+                if fill_id not in self._inflight_ids:
                     self._pending.append((seq, fill_id))
                     self._received[seq] = fill_id
                     self._inflight_ids.add(fill_id)
@@ -122,7 +124,7 @@ class FillStream(Iterator[dict]):
         """Call after applying a fill. Out-of-order acks cannot jump an unapplied fill."""
         seq, fill_id = frame["seq"], frame["fill"]["fill_id"]
         if self._received.get(seq) != fill_id:
-            if fill_id in self.checkpoint.applied_fill_ids and seq <= (self.checkpoint.seq or 0):
+            if seq <= (self.checkpoint.seq or 0):
                 return
             raise ValueError("ack requires a fill delivered by this stream")
         self.checkpoint.applied_fill_ids.add(fill_id)
@@ -139,6 +141,7 @@ class FillStream(Iterator[dict]):
             seq, fill_id = self._pending.popleft()
             del self._received[seq]
             self._inflight_ids.remove(fill_id)
+            self.checkpoint.applied_fill_ids.discard(fill_id)
         candidate = self._pending[0][0] - 1 if self._pending else self._scanned
         self.checkpoint.stream_id = self.announced_stream_id
         self.checkpoint.seq = max(self.checkpoint.seq or 0, candidate)

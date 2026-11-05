@@ -1,6 +1,6 @@
 # 0024. Private synchronous Python client and acknowledged stream watermark
 
-- **Status:** Accepted
+- **Status:** Accepted; amended during review to prune contiguous applied IDs and clarify disconnects.
 - **Date:** 2026-11-05
 
 ## Context
@@ -52,16 +52,21 @@ safe-progress watermark idea. Resume sends both saved sequence and writer ID.
 Checkpoint state belongs to the caller and is restorable, including applied IDs. Crash-safe
 application requires atomic persistence with application state, or idempotent application by fill
 ID; this SDK does not create a database or guarantee transactions over an external store. Use one
-active iterator per checkpoint on one thread. Applied IDs grow with acknowledged fills and
-outstanding tracking grows with unacknowledged deliveries; these are explicit resource costs.
+active iterator per checkpoint on one thread. Prune an applied fill ID as the contiguous watermark
+passes its sequence: replay is strictly after the cursor, so only out-of-order acknowledgements
+beyond it need IDs. Restored applied fills join the sequence queue when replayed so they are also
+pruned after earlier holes close. Outstanding tracking grows with unacknowledged deliveries.
 
 Hello flags, heartbeat and halt/recovery frames remain visible. Unknown frame types pass through
 unchanged, with JSON numeric fractions still Decimal. Their own sequence fields do not advance
 the checkpoint because their semantics are unknown. Applications may ignore them.
 
 Every gap raises `StreamGap` with the original reason/full frame and closes the iterator, preserving
-acknowledged progress. Never reset silently to live. Disconnections propagate; there is no reconnect
-or backoff loop. `reconcile()` reads up to 1,000 fills and the portfolio in two separate non-atomic
+acknowledged progress. Never reset silently to live. All disconnections propagate, including
+`ConnectionClosedOK` on a clean server close, so a bot cannot silently stop seeing fills. The example
+catches `ConnectionClosed`, reports the reason and exits nonzero without a traceback; it does not
+undo an accepted order. There is no reconnect or backoff loop. `reconcile()` reads up to 1,000 fills
+and the portfolio in two separate non-atomic
 requests. It proves no coverage, acknowledges nothing and resets/restarts nothing. Missing history
 can require an explicit portfolio baseline or offline ledger reconciliation. Fills can occur between
 those reads and a new subscription; there is no atomic snapshot-and-stream handoff.

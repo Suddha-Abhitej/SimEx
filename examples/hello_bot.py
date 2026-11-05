@@ -3,6 +3,8 @@
 import os
 from uuid import uuid4
 
+from websockets.exceptions import ConnectionClosed
+
 from simex.client import APIError, Client, StreamGap
 
 
@@ -41,5 +43,5 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
-    except (APIError, StreamGap) as error:
+    except (APIError, StreamGap, ConnectionClosed) as error:
         raise SystemExit(str(error)) from None
