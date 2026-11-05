@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import uuid
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Any
@@ -36,6 +37,7 @@ class BaselineAgent:
         self.cadence_seconds = cadence_seconds
         self.dca_quote_amount = dca_quote_amount
         self.random = random.Random(spec.seed)
+        self.run_id = uuid.uuid4().hex
         self._fired = False
         self._tick_count = 0
         self._previous_mid: Decimal | None = None
@@ -51,7 +53,7 @@ class BaselineAgent:
             return {"ok": False, "reason": "below_min_size"}
         return self.tools.place_order(
             {
-                "client_order_id": f"{self.spec.kind}-{self._tick_count}",
+                "client_order_id": f"{self.spec.kind}-{self.run_id}-{self._tick_count}",
                 "product_id": self._product(),
                 "side": side,
                 "type": "limit",

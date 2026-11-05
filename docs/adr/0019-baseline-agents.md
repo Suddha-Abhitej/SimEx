@@ -31,6 +31,10 @@ Momentum uses only the instantaneous `features` values and is a naive reference,
 strategy. Every order reasoning string mechanically names the rule and condition that fired.
 Agent tasks are rebuilt with the runtime; an agent exception increments
 `simex_exchange_agent_errors_total`, is logged, and stops only that agent.
+Each runtime agent includes a per-run UUID in its client order IDs, so a Kafka rebuild cannot
+reuse an earlier run's idempotency keys. `_order` currently reaches through
+`tools.writer.instruments` to apply the instrument grid; if `ExchangeTools` gains a grid accessor,
+agents should use that accessor instead.
 
 ## Consequences
 

@@ -38,6 +38,23 @@ def test_dca_fires_at_each_tick():
     assert len(baseline.tools.writer.orders) == 2
 
 
+def test_rebuilt_agent_uses_new_idempotency_keys():
+    first = agent("dca")
+    assert first.tick()["ok"]
+
+    rebuilt = BaselineAgent(
+        BaselineSpec("dca", "owner", 7),
+        first.tools,
+        cadence_seconds=1,
+        dca_quote_amount=Decimal("10"),
+    )
+    result = rebuilt.tick()
+
+    assert result["ok"]
+    assert len(first.tools.writer.orders) == 2
+    assert first.run_id != rebuilt.run_id
+
+
 def test_random_is_reproducible_from_seed():
     left = agent("random", seed=42)
     right = agent("random", seed=42)
