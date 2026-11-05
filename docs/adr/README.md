@@ -25,3 +25,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0018](0018-local-mcp-order-entry.md) | Local MCP order entry over the simulated exchange | Accepted |
 | [0019](0019-baseline-agents.md) | Multi-account baseline agents through the common tool boundary | Accepted |
 | [0020](0020-evaluator-price-series-and-significance.md) | Gemini marks and moving-block significance for private evaluation | Accepted |
+| [0021](0021-live-portfolio-weighted-average-pnl.md) | Live portfolio P&L with weighted-average cost and separate fees | Accepted |

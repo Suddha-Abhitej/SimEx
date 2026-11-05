@@ -394,6 +394,19 @@ class LedgerAdapter:
         )
         return [dict(row) for row in rows]
 
+    async def portfolio_fills(self, account_id: str, through_sequence: int) -> list[dict[str, Any]]:
+        """Complete committed fills at a writer snapshot, without the history display cap."""
+        rows = await self.connection.fetch(
+            "SELECT f.fill_id, f.account_id, f.product_id, f.side, f.price, f.quantity, "
+            "f.fee, f.fee_asset, f.ts_ns, t.sequence "
+            "FROM fills f JOIN ledger_transactions t ON t.transaction_id = f.source_key "
+            "WHERE f.account_id = $1 AND t.sequence <= $2 "
+            "ORDER BY f.ts_ns, t.sequence",
+            account_id,
+            through_sequence,
+        )
+        return [dict(row) for row in rows]
+
     async def fold_balances(
         self, account_id: str | None = None, through_sequence: int | None = None
     ) -> dict[str, Decimal] | dict[tuple[str, str], Decimal]:
