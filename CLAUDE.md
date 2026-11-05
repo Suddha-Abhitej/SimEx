@@ -44,7 +44,8 @@ saying so explicitly.
   `docs/adr/README.md`.
 - If a task is ambiguous, ask before building.
 - `.github/copilot-instructions.md` holds the same hard rules plus the measured constants, for
-  other coding agents. Change both together.
+  other coding agents, and `AGENTS.md` repeats them for agents that read that path instead.
+  Change all three together.
 
 ## Stack and environment
 

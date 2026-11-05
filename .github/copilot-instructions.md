@@ -6,7 +6,9 @@ other than the owner.
 
 Read [`docs/PLAN.md`](../docs/PLAN.md) for scope and the build plan, and [`docs/adr/`](../docs/adr/)
 for decisions already made. **Do not re-open an accepted ADR without saying so explicitly.**
-This file duplicates the hard rules from [`CLAUDE.md`](../CLAUDE.md); keep the two in step.
+This file duplicates the hard rules from [`CLAUDE.md`](../CLAUDE.md), and
+[`AGENTS.md`](../AGENTS.md) repeats them for agents that read that path instead; keep all
+three in step.
 
 ## Hard rules
 
