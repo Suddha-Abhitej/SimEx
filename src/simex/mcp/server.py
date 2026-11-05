@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -22,6 +23,8 @@ from simex.exchange import (
 )
 from simex.exchange.writer import band_price
 from simex.ledger import LedgerHalted
+
+from .pnl import position_pnl
 
 
 def _json_value(value: Any) -> Any:
@@ -200,17 +203,53 @@ class ExchangeTools:
 
     def portfolio(self) -> dict[str, Any]:
         orders = self.writer.open_orders(self.account_id)
-        balances = self.writer.balance_totals(self.account_id)
+        balances, sequence = self.writer.balance_snapshot(self.account_id)
         positions = {
             instrument.base: balances.get(instrument.base, Decimal(0))
             for instrument in self.writer.instruments.values()
         }
+        fills: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+        unavailable_reason = None
+        if self.writer.ledger is None:
+            unavailable_reason = "ledger_unavailable"
+        else:
+            try:
+                rows = self.writer.ledger.portfolio_fills(self.account_id, sequence or 0)
+            except Exception:
+                # A failed read cannot turn missing lifetime history into zero P&L.
+                unavailable_reason = "ledger_unavailable"
+            else:
+                for row in rows:
+                    fills[row["product_id"]].append(row)
+        pnl = {}
+        for product, instrument in self.writer.instruments.items():
+            mark = None
+            engine = self.engines.get(product)
+            if (
+                engine is not None
+                and engine.book.venue == "gemini"
+                and self.writer.gate.check(product, self.clock_ns()).open
+            ):
+                try:
+                    mark = engine.book.mid()
+                except BookNotReady:
+                    pass
+            pnl[instrument.base] = position_pnl(
+                fills[product],
+                positions[instrument.base],
+                mark,
+                instrument.quote,
+                unavailable_reason=unavailable_reason,
+            )
         return {
             "ok": True,
             "account_id": self.account_id,
             "balances": _json_value(balances),
             "positions": _json_value(positions),
             "open_orders": _json_value([order.to_dict() for order in orders]),
+            "cost_basis_method": "weighted_average",
+            "ledger_sequence": sequence,
+            "pnl": _json_value(pnl),
         }
 
     def cancel(
@@ -320,6 +359,11 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
 
     @server.tool()
     def portfolio() -> dict[str, Any]:
+        """Balances, positions, open orders and weighted-average P&L by base asset.
+
+        Realised and unrealised P&L are gross; net P&L subtracts the separately reported fees.
+        Unavailable marks or accounting values are null, with a reason in each asset's P&L.
+        """
         return tools.portfolio()
 
     return server
