@@ -86,7 +86,9 @@ def test_momentum_uses_features_thresholds():
 
 def test_shared_limits_are_used():
     baseline = agent("dca")
-    baseline.tools.limits = RiskLimits({"BTC-USD": Decimal("0.000001")}, {"BTC-USD": Decimal("1")})
+    baseline.tools.limits = RiskLimits(
+        {"BTC-USD": Decimal("0.000001")}, {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1")}
+    )
 
     assert baseline.tick()["reason"] == "below_min_size"
 
@@ -94,7 +96,9 @@ def test_shared_limits_are_used():
 def test_below_min_size_is_counted_on_every_tick_and_logged_once(caplog):
     metrics = RunnerMetrics()
     baseline = agent("dca", metrics=metrics)
-    baseline.tools.limits = RiskLimits({"BTC-USD": Decimal("0.000001")}, {"BTC-USD": Decimal("1")})
+    baseline.tools.limits = RiskLimits(
+        {"BTC-USD": Decimal("0.000001")}, {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1")}
+    )
 
     for _ in range(3):
         assert baseline.tick() == {"ok": False, "reason": "below_min_size"}

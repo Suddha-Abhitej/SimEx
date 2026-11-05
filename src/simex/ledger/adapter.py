@@ -259,13 +259,15 @@ class LedgerAdapter:
             "reasoning, "
             "created_at_ns, effective_at_ns, filled_quantity, filled_notional, maker_notional, "
             "taker_notional, fees, fill_count, reject_reason, cancel_requested_at_ns, "
-            "cancel_effective_at_ns, closed_at_ns, market_band_price) VALUES "
-            "($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) "
+            "cancel_effective_at_ns, closed_at_ns, market_band_price, reject_details) VALUES "
+            "($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,"
+            "$20::jsonb) "
             "ON CONFLICT (order_id) DO UPDATE SET status=EXCLUDED.status, "
             "filled_quantity=EXCLUDED.filled_quantity, filled_notional=EXCLUDED.filled_notional, "
             "maker_notional=EXCLUDED.maker_notional, taker_notional=EXCLUDED.taker_notional, "
             "fees=EXCLUDED.fees, fill_count=EXCLUDED.fill_count, "
             "reject_reason=EXCLUDED.reject_reason, "
+            "reject_details=EXCLUDED.reject_details, "
             "cancel_requested_at_ns=EXCLUDED.cancel_requested_at_ns, "
             "cancel_effective_at_ns=EXCLUDED.cancel_effective_at_ns, "
             "closed_at_ns=EXCLUDED.closed_at_ns, "
@@ -290,6 +292,7 @@ class LedgerAdapter:
             order.cancel_effective_at_ns,
             order.closed_at_ns,
             band_price,
+            json.dumps(order.reject_details),
         )
         if reservation is None:
             await self.connection.execute(
@@ -355,7 +358,7 @@ class LedgerAdapter:
             "reasoning, "
             "created_at_ns, effective_at_ns, filled_quantity, filled_notional, maker_notional, "
             "taker_notional, fees, fill_count, reject_reason, cancel_requested_at_ns, "
-            "cancel_effective_at_ns, closed_at_ns, market_band_price "
+            "cancel_effective_at_ns, closed_at_ns, market_band_price, reject_details "
             "FROM orders WHERE account_id=$1",
             account_id,
         )

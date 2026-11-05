@@ -36,7 +36,12 @@ class RaisingEngine:
 
 
 def make_tools(gate=None, engine=None):
-    writer = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), gate or OpenGate(), 200_000_000)
+    limits = RiskLimits(
+        {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1000")}, {"BTC-USD": Decimal("10")}
+    )
+    writer = AccountWriter(
+        DEFAULT_INSTRUMENTS, FeeSchedule(), gate or OpenGate(), 200_000_000, risk_limits=limits
+    )
     engine = engine or PairEngine("BTC-USD", writer)
     engine.book.apply(
         BookUpdate(
@@ -55,7 +60,7 @@ def make_tools(gate=None, engine=None):
         "owner",
         writer,
         {"BTC-USD": engine},
-        RiskLimits({"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1000")}),
+        limits,
     )
 
 
@@ -232,7 +237,7 @@ def test_open_orders_and_history_require_expected_backends():
 def test_place_order_rejects_risk_limit_and_non_string_decimal():
     tools = make_tools()
 
-    assert tools.place_order(
+    refused = tools.place_order(
         {
             "client_order_id": "too-large",
             "product_id": "BTC-USD",
@@ -242,7 +247,12 @@ def test_place_order_rejects_risk_limit_and_non_string_decimal():
             "limit_price": "100",
             "reasoning": "test risk limit",
         }
-    ) == {"ok": False, "reason": "quantity_limit"}
+    )
+    assert not refused["ok"]
+    assert refused["reason"] == "quantity_limit"
+    assert refused["limit"] == "1"
+    assert refused["attempted"] == "1.1"
+    assert refused["order"]["status"] == "rejected"
     assert tools.place_order(
         {
             "client_order_id": "float",

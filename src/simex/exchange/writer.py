@@ -45,6 +45,7 @@ from .orders import (
     Side,
     order_id_for,
 )
+from .risk import RiskLimits
 
 
 class MarketGate(Protocol):
@@ -95,6 +96,8 @@ class AccountWriter:
         delay_ns: int,
         accounts: Accounts | None = None,
         ledger: AccountLedger | None = None,
+        *,
+        risk_limits: RiskLimits | None = None,
     ) -> None:
         if delay_ns < 0:
             raise ValueError("delay_ns can't be negative")
@@ -104,6 +107,9 @@ class AccountWriter:
         self.delay_ns = delay_ns
         self.accounts = accounts or Accounts()
         self.ledger = ledger
+        self.risk_limits = risk_limits
+        if risk_limits is not None and not set(risk_limits.max_quantity) <= set(self.instruments):
+            raise ValueError("risk limits contain an unknown product")
         self.halted = False
         self.halted_accounts: set[str] = set()
         self._balance_lock = threading.RLock()
@@ -228,6 +234,12 @@ class AccountWriter:
             request.check(instrument)
         except OrderError as exc:
             return exc.reason
+        if self.risk_limits is not None and request.product_id not in self.risk_limits.max_quantity:
+            # Disabled products may have no gate/book; fail at the account policy boundary.
+            refusal = self.risk_limits.order_refusal(request.product_id, request.quantity, None)
+            assert refusal is not None
+            order.reject_details = dict(refusal.details)
+            return refusal.reason
         decision = self.gate.check(request.product_id, now_ns)
         if not decision.open:
             return decision.reason or "market_closed"
@@ -240,6 +252,32 @@ class AccountWriter:
                 return "no_liquidity"
             price = band_price(best, request.side, instrument)
             self.band_prices[order.order_id] = price
+        if self.risk_limits is not None:
+            refusal = self.risk_limits.order_refusal(request.product_id, request.quantity, price)
+            if refusal is None:
+                remaining = sum(
+                    (
+                        existing.remaining
+                        for existing in self.orders.values()
+                        if existing.order_id != order.order_id
+                        and existing.account_id == order.account_id
+                        and existing.product_id == order.product_id
+                        and existing.side is order.side
+                        and not existing.status.terminal
+                    ),
+                    Decimal(0),
+                )
+                refusal = self.risk_limits.position_refusal(
+                    order.product_id,
+                    order.side.value,
+                    self.balance_totals(order.account_id).get(instrument.base, Decimal(0)),
+                    remaining,
+                    request.quantity,
+                )
+            if refusal is not None:
+                order.reject_details = dict(refusal.details)
+                self.band_prices.pop(order.order_id, None)
+                return refusal.reason
         asset, amount = required_reservation(
             request.side, request.quantity, price, instrument, self.fees
         )

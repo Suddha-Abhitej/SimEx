@@ -18,6 +18,7 @@ EXPIRED and REJECTED are terminal: nothing leaves them, and the filled quantity 
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from collections.abc import Mapping
@@ -225,10 +226,14 @@ class Order:
     cancel_requested_at_ns: int | None = None
     cancel_effective_at_ns: int | None = None
     closed_at_ns: int | None = None
+    reject_details: dict[str, str] = field(default_factory=dict)
     _fill_ids: list[str] = field(default_factory=list, repr=False)
 
     @classmethod
     def from_record(cls, record: Mapping) -> Order:
+        details = record.get("reject_details") or {}
+        if isinstance(details, str):
+            details = json.loads(details)
         request = OrderRequest(
             client_order_id=record["client_order_id"],
             product_id=record["product_id"],
@@ -255,6 +260,7 @@ class Order:
             cancel_requested_at_ns=record["cancel_requested_at_ns"],
             cancel_effective_at_ns=record["cancel_effective_at_ns"],
             closed_at_ns=record["closed_at_ns"],
+            reject_details=dict(details),
         )
         order._fill_ids = [f"{order.order_id}-{i}" for i in range(1, order.fill_count + 1)]
         return order
@@ -379,6 +385,7 @@ class Order:
             "average_price": None if avg is None else str(avg),
             "fees": str(self.fees),
             "reject_reason": self.reject_reason,
+            "reject_details": dict(self.reject_details),
             "created_at_ns": self.created_at_ns,
             "effective_at_ns": self.effective_at_ns,
             "cancel_requested_at_ns": self.cancel_requested_at_ns,

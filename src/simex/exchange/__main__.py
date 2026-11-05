@@ -11,7 +11,6 @@ import contextlib
 import logging
 import os
 import signal
-from decimal import Decimal
 
 from prometheus_client import start_http_server
 
@@ -20,8 +19,8 @@ from simex.ingest.backoff import Backoff
 from simex.ledger import (
     LedgerMetrics,
 )
-from simex.mcp import RiskLimits
 
+from .risk import RiskLimits
 from .runner_config import RunnerSettings
 from .runner_metrics import RunnerMetrics
 from .runtime import LiveRuntimeGroup
@@ -33,6 +32,7 @@ log = logging.getLogger("simex.exchange")
 async def main() -> None:
     load_environment(log)
     settings = RunnerSettings.from_env()
+    limits = RiskLimits.from_env(settings.pairs)
     metrics = RunnerMetrics()
     ledger_metrics = (
         LedgerMetrics(registry=metrics.registry) if settings.ledger_dsn is not None else None
@@ -51,19 +51,6 @@ async def main() -> None:
             loop.add_signal_handler(sig, task.cancel)
     backoff = Backoff(1.0, 30.0)
 
-    def risk_limits() -> RiskLimits:
-        max_quantity = {}
-        max_notional = {}
-        for product in settings.pairs:
-            suffix = product.replace("-", "_")
-            max_quantity[product] = Decimal(
-                os.environ.get(f"EXCHANGE_MCP_MAX_QUANTITY_{suffix}", "0")
-            )
-            max_notional[product] = Decimal(
-                os.environ.get(f"EXCHANGE_MCP_MAX_NOTIONAL_{suffix}", "0")
-            )
-        return RiskLimits(max_quantity, max_notional)
-
     while True:
         try:
             group = LiveRuntimeGroup(
@@ -75,7 +62,7 @@ async def main() -> None:
                     fetch_max_wait_ms=settings.fetch_max_wait_ms,
                 ),
                 ledger_metrics=ledger_metrics,
-                risk_limits=risk_limits(),
+                risk_limits=limits,
             )
             await group.run()
         except asyncio.CancelledError:

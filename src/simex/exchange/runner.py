@@ -40,6 +40,7 @@ from . import (
 )
 from .engine import EngineSettings, PairEngine
 from .merge import Arrival, Bounds, PairMerge
+from .risk import RiskLimits
 from .runner_config import RunnerSettings
 from .runner_metrics import RunnerMetrics
 from .source import Fetched, MarketSource
@@ -143,6 +144,7 @@ class ExchangeRunner:
         wall_ns: Callable[[], int] = time.time_ns,
         engine_settings: EngineSettings | None = None,
         ledger: SyncLedger | None = None,
+        risk_limits: RiskLimits | None = None,
     ) -> None:
         self.settings = settings
         self.source = source
@@ -162,6 +164,7 @@ class ExchangeRunner:
             self.gate,
             int(settings.order_delay_ms * MS),
             ledger=ledger,
+            risk_limits=risk_limits,
         )
         if ledger is None:
             log.warning("exchange ledger is disabled; fills are not being persisted")
