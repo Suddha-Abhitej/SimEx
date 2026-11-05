@@ -176,6 +176,9 @@ class SyncLedger:
     def load_account(self, account_id: str) -> AccountState:
         return self._call(lambda adapter: adapter.load_account(account_id))
 
+    def history(self, account_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        return self._call(lambda adapter: adapter.history(account_id, limit))
+
     def close(self) -> None:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join()

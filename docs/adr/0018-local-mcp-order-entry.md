@@ -11,8 +11,8 @@ real venue, bypassing the exchange's gate and timing rules, or accepting unbound
 
 ## Decision
 
-Add a small MCP server using the Python MCP SDK. It exposes only `quote`, `place_order`, and
-`portfolio`, and is constructed with one account ID, an `AccountWriter`, a per-product
+Add a small MCP server using the Python MCP SDK. It exposes `quote`, `place_order`, `portfolio`,
+`features`, `cancel`, `open_orders`, and `history`, and is constructed with one account ID, an `AccountWriter`, a per-product
 `PairEngine` map, and explicit per-product quantity and notional limits. The account ID is not a
 tool argument, so this server cannot create a second account.
 
@@ -30,6 +30,16 @@ identical payload returns the existing order from `AccountWriter`.
 
 The demo is a local private run. Its recording is written below `data/`, which is gitignored and
 must not be committed because it contains Gemini-derived prices and results.
+
+`features` computes only instantaneous Decimal book values (mid, spread and depth imbalance);
+event-time features remain the responsibility of #18. `cancel` calls the writer's delayed
+`request_cancel` and reports a request rather than an immediate cancellation. `open_orders`
+delegates to the writer. `history` reads committed fills from the ledger, including the order's
+reasoning string, so it remains available after restart.
+
+Every order stores a bounded reasoning string in the `orders.reasoning` column (migration 007).
+The value is opaque untrusted model text: it is passed as a query parameter and is never
+interpolated into SQL, log format strings or shell context.
 
 The MCP server and reconciliation job run in the same supervised runtime group as the exchange
 runner. A Kafka outage tears down the whole group, including the ledger connection, so the MCP
@@ -54,5 +64,5 @@ private under `data/` and is not committed (ADR 0010).
 The MCP surface is deliberately narrow and private, and model input cannot exceed the limits
 provided by the host. A caller must supply a live exchange runner and explicit risk limits, so the
 server is not a standalone public service. Authentication beyond localhost binding is deferred to
-the API work in #15. The group lifecycle adds restart latency and intentionally makes order entry
+the API work after #15. The group lifecycle adds restart latency and intentionally makes order entry
 unavailable during recovery from a Kafka outage.

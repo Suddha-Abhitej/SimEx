@@ -92,21 +92,57 @@ class ExchangeTools:
         engine = self.engines[product_id]
         try:
             bids, asks = engine.book.depth(depth)
-            return {
-                "ok": True,
-                "product_id": product_id,
-                "state": str(engine.book.state),
-                "last_update_id": engine.book.last_update_id,
-                "received_at_ns": engine.book.received_at_ns,
-                "bids": _json_value([[price, size] for price, size in bids]),
-                "asks": _json_value([[price, size] for price, size in asks]),
-            }
+            return _json_value(
+                {
+                    "ok": True,
+                    "product_id": product_id,
+                    "state": str(engine.book.state),
+                    "last_update_id": engine.book.last_update_id,
+                    "received_at_ns": engine.book.received_at_ns,
+                    "bids": _json_value([[price, size] for price, size in bids]),
+                    "asks": _json_value([[price, size] for price, size in asks]),
+                }
+            )
+        except BookNotReady:
+            return {"ok": False, "reason": "book_not_ready"}
+
+    def features(self, product_id: str, depth: int = 5) -> dict[str, Any]:
+        if product_id not in self.engines:
+            return {"ok": False, "reason": "unknown_product"}
+        if not isinstance(depth, int) or isinstance(depth, bool) or not 1 <= depth <= 100:
+            return {"ok": False, "reason": "bad_depth"}
+        try:
+            bids, asks = self.engines[product_id].book.depth(depth)
+            best_bid = bids[0][0] if bids else None
+            best_ask = asks[0][0] if asks else None
+            bid_depth = sum((size for _, size in bids), Decimal(0))
+            ask_depth = sum((size for _, size in asks), Decimal(0))
+            total_depth = bid_depth + ask_depth
+            return _json_value(
+                {
+                    "ok": True,
+                    "product_id": product_id,
+                    "depth": depth,
+                    "mid": None
+                    if best_bid is None or best_ask is None
+                    else (best_bid + best_ask) / 2,
+                    "spread": None if best_bid is None or best_ask is None else best_ask - best_bid,
+                    "depth_imbalance": (
+                        None
+                        if not total_depth
+                        else ((bid_depth - ask_depth) / total_depth).quantize(Decimal("0.000001"))
+                    ),
+                }
+            )
         except BookNotReady:
             return {"ok": False, "reason": "book_not_ready"}
 
     def place_order(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         if not isinstance(payload, Mapping):
             return {"ok": False, "reason": "bad_payload"}
+        reasoning = payload.get("reasoning")
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            return {"ok": False, "reason": "reasoning_required"}
         if not isinstance(payload.get("quantity"), str) or (
             payload.get("limit_price") is not None
             and not isinstance(payload.get("limit_price"), str)
@@ -177,6 +213,65 @@ class ExchangeTools:
             "open_orders": _json_value([order.to_dict() for order in orders]),
         }
 
+    def cancel(
+        self, *, order_id: str | None = None, client_order_id: str | None = None
+    ) -> dict[str, Any]:
+        if self.account_id in self.writer.halted_accounts:
+            return {"ok": False, "reason": "account_halted"}
+        if self.writer.halted:
+            return {"ok": False, "reason": "writer_halted"}
+        if order_id is None and client_order_id is None:
+            return {"ok": False, "reason": "missing_order_reference"}
+        resolved_id = order_id or self.writer.by_key.get((self.account_id, client_order_id or ""))
+        order = self.writer.orders.get(resolved_id) if resolved_id else None
+        if order is None or order.account_id != self.account_id:
+            return {"ok": False, "reason": "unknown_order"}
+        if order.status.terminal:
+            return {"ok": False, "reason": "order_terminal"}
+        if order.cancel_requested_at_ns is not None:
+            return {"ok": False, "reason": "cancel_already_requested"}
+        try:
+            order = self.writer.request_cancel(
+                self.account_id,
+                self.clock_ns(),
+                order_id=order_id,
+                client_order_id=client_order_id,
+            )
+        except LedgerHalted:
+            return {"ok": False, "reason": "ledger_halted"}
+        except (OrderError, RuntimeError):
+            return {"ok": False, "reason": "cancel_failed"}
+        return {"ok": True, "status": "requested", "order": _json_value(order.to_dict())}
+
+    def open_orders(self) -> dict[str, Any]:
+        if self.account_id in self.writer.halted_accounts:
+            return {"ok": False, "reason": "account_halted"}
+        if self.writer.halted:
+            return {"ok": False, "reason": "writer_halted"}
+        return {
+            "ok": True,
+            "orders": _json_value(
+                [order.to_dict() for order in self.writer.open_orders(self.account_id)]
+            ),
+        }
+
+    def history(self, limit: int = 100) -> dict[str, Any]:
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+            return {"ok": False, "reason": "bad_limit"}
+        if self.account_id in self.writer.halted_accounts:
+            return {"ok": False, "reason": "account_halted"}
+        if self.writer.halted:
+            return {"ok": False, "reason": "writer_halted"}
+        if self.writer.ledger is None:
+            return {"ok": False, "reason": "ledger_unavailable"}
+        try:
+            fills = self.writer.ledger.history(self.account_id, limit)
+        except LedgerHalted:
+            return {"ok": False, "reason": "ledger_halted"}
+        except (RuntimeError, ValueError):
+            return {"ok": False, "reason": "history_unavailable"}
+        return {"ok": True, "fills": _json_value(fills)}
+
 
 def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
     server = FastMCP("simex", host="127.0.0.1", port=port)
@@ -193,6 +288,7 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
         type: str,
         quantity: str,
         limit_price: str | None = None,
+        reasoning: str = "",
     ) -> dict[str, Any]:
         payload = {
             "client_order_id": client_order_id,
@@ -203,7 +299,24 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
         }
         if limit_price is not None:
             payload["limit_price"] = limit_price
+        payload["reasoning"] = reasoning
         return tools.place_order(payload)
+
+    @server.tool()
+    def features(product_id: str, depth: int = 5) -> dict[str, Any]:
+        return tools.features(product_id, depth)
+
+    @server.tool()
+    def cancel(order_id: str | None = None, client_order_id: str | None = None) -> dict[str, Any]:
+        return tools.cancel(order_id=order_id, client_order_id=client_order_id)
+
+    @server.tool()
+    def open_orders() -> dict[str, Any]:
+        return tools.open_orders()
+
+    @server.tool()
+    def history(limit: int = 100) -> dict[str, Any]:
+        return tools.history(limit)
 
     @server.tool()
     def portfolio() -> dict[str, Any]:

@@ -256,10 +256,11 @@ class LedgerAdapter:
         request = order.request.to_dict()
         await self.connection.execute(
             "INSERT INTO orders (order_id, account_id, client_order_id, request, status, "
+            "reasoning, "
             "created_at_ns, effective_at_ns, filled_quantity, filled_notional, maker_notional, "
             "taker_notional, fees, fill_count, reject_reason, cancel_requested_at_ns, "
             "cancel_effective_at_ns, closed_at_ns, market_band_price) VALUES "
-            "($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) "
+            "($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) "
             "ON CONFLICT (order_id) DO UPDATE SET status=EXCLUDED.status, "
             "filled_quantity=EXCLUDED.filled_quantity, filled_notional=EXCLUDED.filled_notional, "
             "maker_notional=EXCLUDED.maker_notional, taker_notional=EXCLUDED.taker_notional, "
@@ -274,6 +275,8 @@ class LedgerAdapter:
             order.request.client_order_id,
             json.dumps(request),
             order.status.value,
+            # Queryable copy of the value also carried in the request JSON.
+            order.request.reasoning,
             order.created_at_ns,
             order.effective_at_ns,
             order.filled_quantity,
@@ -349,6 +352,7 @@ class LedgerAdapter:
             "SELECT order_id, account_id, client_order_id, request->>'product_id' AS product_id, "
             "request->>'side' AS side, request->>'type' AS type, "
             "request->>'quantity' AS quantity, request->>'limit_price' AS limit_price, status, "
+            "reasoning, "
             "created_at_ns, effective_at_ns, filled_quantity, filled_notional, maker_notional, "
             "taker_notional, fees, fill_count, reject_reason, cancel_requested_at_ns, "
             "cancel_effective_at_ns, closed_at_ns, market_band_price "
@@ -375,6 +379,20 @@ class LedgerAdapter:
             tuple(dict(row) for row in balances),
             latest_sequence,
         )
+
+    async def history(self, account_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("history limit must be between 1 and 1000")
+        rows = await self.connection.fetch(
+            "SELECT f.fill_id, f.order_id, f.account_id, f.product_id, f.side, "
+            "f.price, f.quantity, f.liquidity, f.cause, f.fee, f.fee_asset, f.ts_ns, "
+            "o.reasoning "
+            "FROM fills f JOIN orders o ON o.order_id = f.order_id "
+            "WHERE f.account_id = $1 ORDER BY f.ts_ns DESC, f.fill_id DESC LIMIT $2",
+            account_id,
+            limit,
+        )
+        return [dict(row) for row in rows]
 
     async def fold_balances(
         self, account_id: str | None = None, through_sequence: int | None = None
