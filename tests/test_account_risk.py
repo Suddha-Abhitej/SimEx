@@ -79,7 +79,12 @@ def test_writer_enforces_notional_cap_using_the_reservation_price(kind, attempte
     assert order.status is OrderStatus.REJECTED
     assert order.reject_reason == "notional_limit"
     assert D(order.reject_details["limit"]) == D("10")
-    assert D(order.reject_details["attempted"]) == D(attempted)
+    if kind == "limit":
+        assert D(order.reject_details["attempted"]) == D(attempted)
+    else:
+        assert "attempted" not in order.reject_details
+        assert "10 USD" in order.reject_details["rule"]
+        assert "Reduce quantity" in order.reject_details["rule"]
     assert order.order_id not in writer.band_prices
 
 
@@ -304,7 +309,8 @@ def test_market_risk_refusal_retries_keep_original_details_when_the_gate_changes
     request = payload("market-retry", "0.2", kind="market")
     refusal = tools.place_order(request)
     assert refusal["reason"] == "notional_limit"
-    assert D(refusal["attempted"]) == D("20.302")
+    assert "attempted" not in refusal and "attempted" not in refusal["order"]["reject_details"]
+    assert "10 USD" in refusal["rule"] and "limit order" in refusal["rule"]
     writer.gate = ClosedGate()
     assert tools.place_order(request) == refusal
 

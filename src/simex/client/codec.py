@@ -10,7 +10,9 @@ ORDER_MONEY = frozenset(
     {"quantity", "limit_price", "filled_quantity", "remaining_quantity", "average_price", "fees"}
 )
 FILL_MONEY = frozenset({"price", "quantity", "fee"})
-DETAIL_MONEY = frozenset({"limit", "attempted", "minimum", "maximum"})
+DETAIL_MONEY = frozenset(
+    {"limit", "attempted", "minimum", "maximum", "increment", "required", "available"}
+)
 PNL_MONEY = frozenset(
     {
         "quantity",

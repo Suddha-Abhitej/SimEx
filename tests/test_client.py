@@ -289,8 +289,61 @@ def test_invalid_order_policy_is_left_to_the_real_server():
     with serving() as api, Client(api.url, TOKEN) as client:
         with pytest.raises(APIError) as caught:
             place(client, quantity="0.000000001")  # Off-grid; transport still sends it unchanged.
-        assert caught.value.reason == "bad_order"
+        assert caught.value.reason == "bad_quantity"
         assert json.loads(api.probe.requests[0][2])["quantity"] == "0.000000001"
+
+
+@pytest.mark.parametrize(
+    "changes,reason,money",
+    [
+        (
+            {"quantity": "0.000000001"},
+            "bad_quantity",
+            {"increment": D("0.00000001"), "attempted": D("0.000000001")},
+        ),
+        (
+            {"limit_price": "100.005"},
+            "bad_price",
+            {"increment": D("0.01"), "attempted": D("100.005")},
+        ),
+        (
+            {"quantity": "0.000005"},
+            "below_min_size",
+            {"minimum": D("0.00001"), "attempted": D("0.000005")},
+        ),
+        (
+            {"quantity": "0.1", "limit_price": "100"},
+            "insufficient_funds",
+            {"required": D("10.12"), "available": D("0")},
+        ),
+    ],
+)
+def test_actionable_refusal_money_is_decimal_from_the_real_app(changes, reason, money):
+    tools = api_tools()
+    tools.writer.accounts.balance("owner", "USD").available = D("0")
+    with serving(tools) as api, Client(api.url, TOKEN) as client:
+        with pytest.raises(APIError) as caught:
+            place(client, **changes)
+        error = caught.value
+        assert error.reason == reason and error.body["rule"]
+        wire = json.loads(error.raw_body)
+        for key, value in money.items():
+            assert type(error.body[key]) is D and error.body[key] == value
+            assert isinstance(wire[key], str) and D(wire[key]) == value
+            if "order" in error.body:
+                assert error.body["order"]["reject_details"][key] == value
+                assert type(error.body["order"]["reject_details"][key]) is D
+        no_floats(error.body)
+        assert len(api.probe.requests) == 1
+
+
+def test_codec_decodes_all_new_detail_money_in_recovered_orders():
+    from simex.client.codec import response
+
+    values = {"increment": "0.00000001", "required": "10.12", "available": "0"}
+    result = response({"ok": False, "order": {"reject_details": values}}, "place_order")
+    assert result["order"]["reject_details"] == {key: D(value) for key, value in values.items()}
+    assert all(type(value) is D for value in result["order"]["reject_details"].values())
 
 
 @pytest.mark.parametrize("by_client_id", [False, True])
