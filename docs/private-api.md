@@ -53,6 +53,54 @@ Position-limit refusals include the writer's `limit`, `attempted` and other `rej
 also retained inside the rejected order. `risk_limits_missing` is HTTP 503 and means server
 misconfiguration; the live runtime refuses to start without its risk policy.
 
+## Actionable order refusals
+
+`reason` is the stable machine-readable contract. Details are separate top-level fields, shared
+by REST and MCP. A recorded rejection also retains them in `order.reject_details`, so an
+idempotent retry or recovery preserves the original refusal even after balances, fees or limits
+change. Validation before acceptance has no recorded order. A malformed payload still returns
+`bad_payload`; a reasonless parsing failure falls back to `bad_order` without exposing internals.
+
+| Reason | Details a client can expect |
+| --- | --- |
+| `below_min_size` | `field`, `rule`, `product_id`, `minimum`, `attempted` quantity, and human-readable `detail` |
+| `bad_quantity` | `field: quantity`, `rule` requiring a positive multiple of the size increment, `increment`, `attempted`, `product_id`, `detail` |
+| `bad_price` | `field: limit_price`, `rule` requiring a positive multiple of the price tick, `increment`, `attempted`, `product_id`, `detail` |
+| `bad_client_order_id` | `field`, `rule` and `detail`: 1–64 characters from `A-Z a-z 0-9 . _ : -` |
+| `bad_decimal` / `bad_decimal_or_product` | `field`, `rule` and `detail` requiring a finite decimal string; no echo of the malformed input |
+| `bad_field` | `field`, `rule` and `detail`: permitted side/type values, or that market orders have no limit price |
+| `unknown_product` | `field: product_id`, `rule` and `detail` requiring a configured product; HTTP 404 |
+| `reasoning_required` / `bad_reasoning` | `field`, `rule` and `detail` explaining the non-empty string / 8,192-character bound |
+| `quantity_limit` | Existing `rule`, `product_id`, `limit`, `attempted` quantity |
+| `notional_limit` | Existing `product_id` and configured `limit`; limit orders also report their requested `attempted` notional. Market-order omissions and remedy are described below. |
+| `position_limit` | Existing `rule`, `product_id`, signed `attempted` endpoint, `limit`, `minimum`, `maximum`, `side` |
+| `insufficient_funds` | `rule`, `product_id`, `asset`, `available`, and `required` where safe; available excludes existing reservations |
+| `stale_level2:...` / `feed_lagging:...` | `rule`, `product_id`, `detail` advising the caller to wait for fresh level2 / recovered feed lag; the entire reason suffix is unchanged; HTTP 503 |
+| `idempotency_key_reused` | `field`, `rule`, `detail` explaining that the ID already names a different order |
+
+The grid reasons remain `bad_price` and `bad_quantity`, including for off-grid input. The exchange
+never rounds or repairs an order. All monetary detail fields are Decimal strings on the wire;
+the Python SDK decodes `limit`, `attempted`, `minimum`, `maximum`, `increment`, `required` and
+`available` to `Decimal`, including inside `reject_details`. Malformed fields get explanatory
+rules rather than raw-value or exception-text echoes. Other existing refusal reasons may have no
+additional fields; clients must tolerate absent and new fields and reasons.
+
+For a **limit buy**, `required` includes the caller's limit notional plus the higher maker/taker
+fee, rounded up as in reservation. For a **sell**, it is the base quantity. The **market buy**
+requirement depends on the live book's band price: publishing that amount would disclose a price
+by division. Its `required` is deliberately omitted, and its rule names the available quote
+balance as the funding limit, explains the band-bounded notional plus fee, and advises reducing
+quantity or using a limit order to know its notional exactly.
+
+A **market notional-limit** refusal likewise omits `attempted`. Its rule names the configured
+notional cap and explains the same remedy. The notional cap itself excludes fees; the reservation
+also needs fee headroom. Neither omission changes when an order is refused. No book price, band
+price, midpoint, best bid/ask, other-account state, token or DSN is added to refusal details.
+Market preflight failures keep `no_band_price`; they do not change into a different gate reason.
+Recovered market-notional refusals from before this change also omit the old book-derived
+`attempted` value and carry the remedy. Historical ledger rows are not rewritten; this protects
+the recovered order and response, so direct exports of old ledger data still need private handling.
+
 ## Connect, checkpoint and resume
 
 The first frame is always `hello` after successful authentication:

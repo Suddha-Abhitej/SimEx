@@ -204,6 +204,11 @@ def test_read_refusals_keep_exact_reasons(path, reason, status):
         ({"side": "wrong"}, "bad_field"),
         ({"product_id": "UNKNOWN"}, "unknown_product"),
         ({"quantity": "0.000000001"}, "bad_quantity"),
+        ({"quantity": "0.000005"}, "below_min_size"),
+        ({"limit_price": "100.005"}, "bad_price"),
+        ({"client_order_id": "bad id"}, "bad_client_order_id"),
+        ({"quantity": "not a number"}, "bad_decimal"),
+        ({"type": "stop"}, "bad_field"),
         ({"reasoning": ""}, "reasoning_required"),
         ({"reasoning": "x" * 8193}, "bad_reasoning"),
     ],
@@ -226,6 +231,15 @@ def test_bad_order_refusal_is_identical_over_rest_and_mcp(patch, reason):
         assert response.json()["reason"] == reason
         assert expected["reason"] == reason
         assert response.json() == expected
+        if reason not in {"quantity_limit", "reasoning_required"}:
+            assert expected["field"] and expected["rule"] and expected["detail"]
+        if reason in {"bad_quantity", "bad_price"}:
+            assert Decimal(expected["increment"]) == (
+                Decimal("0.00000001") if reason == "bad_quantity" else Decimal("0.01")
+            )
+        if reason == "below_min_size":
+            assert Decimal(expected["minimum"]) == Decimal("0.00001")
+            assert Decimal(expected["attempted"]) == Decimal("0.000005")
 
     # MCP request-shape validation rejects numeric money before the shared method is called.
     # Its typed tool is tested separately below with a valid string request shape.
@@ -249,6 +263,71 @@ def test_book_not_ready_refuses_with_503(route):
         response = client.get(route, headers=HEADERS)
         assert response.status_code == 503
         assert response.json()["reason"] == "book_not_ready"
+
+
+@pytest.mark.parametrize("case", ["limit_funds", "market_funds", "market_notional", "stale", "lag"])
+def test_writer_detail_and_privacy_are_identical_over_rest_and_mcp(case, caplog):
+    from simex.exchange import GateDecision
+
+    async def scenario():
+        tools = api_tools()
+        tools.writer.accounts.balance("owner", "USD").available = Decimal(0)
+        reason = {
+            "stale": "stale_level2:age_ns=5000000001",
+            "lag": "feed_lagging:excess_ns=2000000001",
+        }.get(case)
+
+        class Gate:
+            def check(self, product_id, now_ns):
+                return GateDecision(
+                    reason is None, reason, Decimal("54321.12"), Decimal("54322.34")
+                )
+
+        tools.writer.gate = Gate()
+        if case == "market_notional":
+            tools.writer.risk_limits = RiskLimits(
+                {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("1")}, {"BTC-USD": Decimal("10")}
+            )
+        elif case == "market_funds":
+            tools.writer.risk_limits = RiskLimits(
+                {"BTC-USD": Decimal("1")},
+                {"BTC-USD": Decimal("1000000")},
+                {"BTC-USD": Decimal("10")},
+            )
+        payload = order_payload(order_type="market" if case.startswith("market_") else "limit")
+        expected = (await create_server(tools).call_tool("place_order", payload))[1]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=create_app(tools, token=TOKEN)),
+            base_url="http://private",
+            headers=HEADERS,
+        ) as client:
+            response = await client.post("/v1/orders", json=payload)
+        assert response.json() == expected
+        assert response.status_code == (503 if reason else 400)
+        assert expected["reason"] == (
+            reason or ("notional_limit" if case == "market_notional" else "insufficient_funds")
+        )
+        assert expected["rule"] == expected["order"]["reject_details"]["rule"]
+        for forbidden in ("54321.12", "54322.34", TOKEN, "other-account", "postgresql://"):
+            assert forbidden not in response.text
+        for forbidden in ('"best_bid"', '"best_ask"', '"mid"', '"market_band_price"'):
+            assert forbidden not in response.text
+        if case == "market_notional":
+            assert (
+                "attempted" not in expected
+                and "attempted" not in expected["order"]["reject_details"]
+            )
+            assert "1 USD" in expected["rule"] and "Reduce quantity" in expected["rule"]
+        elif case == "market_funds":
+            assert (
+                "required" not in expected and "required" not in expected["order"]["reject_details"]
+            )
+            assert (
+                "available USD balance 0" in expected["rule"] and "limit order" in expected["rule"]
+            )
+
+    asyncio.run(scenario())
+    assert "unmapped exchange refusal" not in caplog.text
 
 
 def test_halts_history_failures_and_order_conflicts(monkeypatch):

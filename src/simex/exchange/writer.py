@@ -46,6 +46,7 @@ from .orders import (
     OrderStatus,
     OrderType,
     Side,
+    field_error,
     order_id_for,
 )
 from .risk import RiskLimits
@@ -88,6 +89,28 @@ def band_price(best: Decimal, side: Side, instrument: Instrument) -> Decimal:
     return (best * (1 - band) / instrument.price_tick).to_integral_value(
         rounding=ROUND_DOWN
     ) * instrument.price_tick
+
+
+def _gate_details(reason: str, product_id: str) -> dict[str, str]:
+    rules = {
+        "stale_level2": "Wait for fresh level2 data before resubmitting",
+        "feed_lagging": "Wait until feed lag recovers before resubmitting",
+    }
+    rule = rules.get(reason.split(":", 1)[0])
+    return {} if rule is None else {"rule": rule, "product_id": product_id, "detail": rule}
+
+
+def _market_notional_details(details: Mapping[str, str], quote: str) -> dict[str, str]:
+    safe = dict(details)
+    # A band-derived notional divided by the caller's quantity reveals a price.
+    safe.pop("attempted", None)
+    safe["rule"] = (
+        "Band-bounded notional must not exceed configured max_notional limit "
+        f"{safe.get('limit', '(not recorded)')} {quote}; the reservation also "
+        "requires band-bounded notional plus fee. Reduce quantity or use a "
+        "limit order to know its notional exactly"
+    )
+    return safe
 
 
 class AccountWriter:
@@ -199,6 +222,16 @@ class AccountWriter:
             balance.available -= reservation.remaining
         for row in state.orders:
             order = Order.from_record(row)
+            if (
+                order.request.type is OrderType.MARKET
+                and order.reject_reason == "notional_limit"
+                and "attempted" in order.reject_details
+            ):
+                # Old ledger rows may predate the privacy fix; do not replay their price leak.
+                instrument = self.instruments.get(order.product_id)
+                order.reject_details = _market_notional_details(
+                    order.reject_details, instrument.quote if instrument else "quote currency"
+                )
             self.orders[order.order_id] = order
             self.by_key[(account_id, order.request.client_order_id)] = order.order_id
             if row["market_band_price"] is not None:
@@ -230,9 +263,10 @@ class AccountWriter:
         if (existing := self.by_key.get(key)) is not None:
             order = self.orders[existing]
             if order.request != request:
-                raise OrderError(
+                raise field_error(
                     "idempotency_key_reused",
-                    f"{request.client_order_id} already names a different order",
+                    "client_order_id",
+                    "already names a different order; use a new ID for a different order",
                 )
             return order
 
@@ -259,10 +293,14 @@ class AccountWriter:
         request = order.request
         instrument = self.instruments.get(request.product_id)
         if instrument is None:
+            order.reject_details = field_error(
+                "unknown_product", "product_id", "must name a configured product"
+            ).details
             return "unknown_product"
         try:
             request.check(instrument)
         except OrderError as exc:
+            order.reject_details = dict(exc.details)
             return exc.reason
         if self.risk_limits is not None and request.product_id not in self.risk_limits.max_quantity:
             # Disabled products may have no gate/book; fail at the account policy boundary.
@@ -272,7 +310,9 @@ class AccountWriter:
             return refusal.reason
         decision = self.gate.check(request.product_id, now_ns)
         if not decision.open:
-            return decision.reason or "market_closed"
+            reason = decision.reason or "market_closed"
+            order.reject_details = _gate_details(reason, request.product_id)
+            return reason
         if request.type is OrderType.LIMIT:
             assert request.limit_price is not None
             price = request.limit_price
@@ -306,6 +346,10 @@ class AccountWriter:
                 )
             if refusal is not None:
                 order.reject_details = dict(refusal.details)
+                if request.type is OrderType.MARKET and refusal.reason == "notional_limit":
+                    order.reject_details = _market_notional_details(
+                        order.reject_details, instrument.quote
+                    )
                 self.band_prices.pop(order.order_id, None)
                 return refusal.reason
         asset, amount = required_reservation(
@@ -314,6 +358,24 @@ class AccountWriter:
         try:
             self.accounts.reserve(order.order_id, order.account_id, asset, amount)
         except InsufficientFunds:
+            available = self.accounts.balance(order.account_id, asset).available
+            order.reject_details = {
+                "rule": "quantity <= available base balance"
+                if request.side is Side.SELL
+                else "limit notional plus maximum rounded-up fee <= available quote balance",
+                "product_id": request.product_id,
+                "asset": asset,
+                "required": str(amount),
+                "available": str(available),
+            }
+            if request.type is OrderType.MARKET and request.side is Side.BUY:
+                # Even a fee-inclusive requirement would disclose the live band price.
+                order.reject_details.pop("required")
+                order.reject_details["rule"] = (
+                    f"Reservation must fit available {asset} balance {available} and covers "
+                    "band-bounded notional plus fee (the maximum rounded-up fee). "
+                    "Reduce quantity or use a limit order to know its notional exactly"
+                )
             self.band_prices.pop(order.order_id, None)
             return "insufficient_funds"
         return None
@@ -415,6 +477,7 @@ class AccountWriter:
         order = self.orders[order_id]
         self._require_running(order.account_id)
         order.reject(reason, ts_ns)
+        order.reject_details = _gate_details(reason, order.product_id)
         self._close(order)
         self._emit("order_rejected", order=order.to_dict())
 

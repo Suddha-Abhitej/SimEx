@@ -75,10 +75,20 @@ class FillCause(StrEnum):
 class OrderError(ValueError):
     """A request that can't become an order. `reason` is a stable machine-readable code."""
 
-    def __init__(self, reason: str, detail: str = "") -> None:
+    def __init__(
+        self, reason: str, detail: str = "", *, details: Mapping[str, str] | None = None
+    ) -> None:
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
         self.detail = detail
+        self.details = dict(details or {})
+        if detail:
+            self.details["detail"] = detail
+
+
+def field_error(reason: str, name: str, rule: str) -> OrderError:
+    """Explain a malformed field without echoing arbitrary input or exception text."""
+    return OrderError(reason, f"{name} {rule}", details={"field": name, "rule": rule})
 
 
 def order_id_for(account_id: str, client_order_id: str) -> str:
@@ -89,15 +99,13 @@ def order_id_for(account_id: str, client_order_id: str) -> str:
 def _decimal(payload: Mapping, name: str) -> Decimal:
     value = payload.get(name)
     if not isinstance(value, str):
-        raise OrderError(
-            "bad_decimal", f"{name} must be a decimal string, not {type(value).__name__}"
-        )
+        raise field_error("bad_decimal", name, "must be a finite decimal string")
     try:
         parsed = Decimal(value.strip())
     except InvalidOperation:
-        raise OrderError("bad_decimal", f"{name}={value!r} is not a decimal") from None
+        raise field_error("bad_decimal", name, "must be a finite decimal string") from None
     if not parsed.is_finite():
-        raise OrderError("bad_decimal", f"{name}={value!r} is not finite")
+        raise field_error("bad_decimal", name, "must be a finite decimal string")
     return parsed
 
 
@@ -116,24 +124,35 @@ class OrderRequest:
         """From a JSON-like mapping. Raises OrderError with a reason code."""
         client_order_id = payload.get("client_order_id")
         if not isinstance(client_order_id, str) or not _CLIENT_ID.fullmatch(client_order_id):
-            raise OrderError("bad_client_order_id", "1 to 64 of A-Z a-z 0-9 . _ : -")
+            raise field_error(
+                "bad_client_order_id",
+                "client_order_id",
+                "must contain 1 to 64 of A-Z a-z 0-9 . _ : -",
+            )
         try:
             side = Side(payload.get("side"))
+        except ValueError:
+            raise field_error("bad_field", "side", "must be one of: buy, sell") from None
+        try:
             kind = OrderType(payload.get("type"))
-        except ValueError as exc:
-            raise OrderError("bad_field", str(exc)) from None
+        except ValueError:
+            raise field_error("bad_field", "type", "must be one of: market, limit") from None
         product = payload.get("product_id")
         if not isinstance(product, str):
-            raise OrderError("unknown_product", repr(product))
+            raise field_error("unknown_product", "product_id", "must name a configured product")
         price = None
         if kind is OrderType.LIMIT:
             price = _decimal(payload, "limit_price")
         elif payload.get("limit_price") is not None:
-            raise OrderError("bad_field", "a market order has no limit_price")
+            raise field_error(
+                "bad_field", "limit_price", "must be absent: a market order has no limit_price"
+            )
         reasoning = payload.get("reasoning", "")
         if not isinstance(reasoning, str) or len(reasoning) > MAX_REASONING_LENGTH:
-            raise OrderError(
-                "bad_reasoning", f"reasoning must be at most {MAX_REASONING_LENGTH} characters"
+            raise field_error(
+                "bad_reasoning",
+                "reasoning",
+                f"must be a string of at most {MAX_REASONING_LENGTH} characters",
             )
         return cls(
             client_order_id, product, side, kind, _decimal(payload, "quantity"), price, reasoning
@@ -143,18 +162,42 @@ class OrderRequest:
         """The pair's grids and minimum. Off-grid values are rejected, never rounded."""
         if self.quantity <= 0 or not instrument.on_size_grid(self.quantity):
             raise OrderError(
-                "bad_quantity", f"{self.quantity} is not a positive multiple of "
-                f"{instrument.size_increment}"
-            )  # fmt: skip
+                "bad_quantity",
+                f"{self.quantity} is not a positive multiple of {instrument.size_increment}",
+                details={
+                    "rule": "positive multiple of size_increment",
+                    "field": "quantity",
+                    "product_id": self.product_id,
+                    "increment": str(instrument.size_increment),
+                    "attempted": str(self.quantity),
+                },
+            )
         if self.quantity < instrument.min_size:
-            raise OrderError("below_min_size", f"{self.quantity} < {instrument.min_size}")
+            raise OrderError(
+                "below_min_size",
+                f"{self.quantity} < {instrument.min_size}",
+                details={
+                    "rule": "quantity >= minimum",
+                    "field": "quantity",
+                    "product_id": self.product_id,
+                    "minimum": str(instrument.min_size),
+                    "attempted": str(self.quantity),
+                },
+            )
         if self.type is OrderType.LIMIT:
             assert self.limit_price is not None
             if not instrument.on_price_grid(self.limit_price):
                 raise OrderError(
-                    "bad_price", f"{self.limit_price} is not a positive multiple of "
-                    f"{instrument.price_tick}"
-                )  # fmt: skip
+                    "bad_price",
+                    f"{self.limit_price} is not a positive multiple of {instrument.price_tick}",
+                    details={
+                        "rule": "positive multiple of price_tick",
+                        "field": "limit_price",
+                        "product_id": self.product_id,
+                        "increment": str(instrument.price_tick),
+                        "attempted": str(self.limit_price),
+                    },
+                )
 
     def to_dict(self) -> dict:
         return {

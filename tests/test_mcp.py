@@ -128,6 +128,9 @@ def test_place_order_requires_non_empty_reasoning_before_writer():
         assert tools.place_order({**order_payload(reasoning), "reasoning": reasoning}) == {
             "ok": False,
             "reason": "reasoning_required",
+            "field": "reasoning",
+            "rule": "must be a non-empty string",
+            "detail": "reasoning must be a non-empty string",
         }
     assert calls == 0
     assert tools.writer.orders == {}
@@ -263,7 +266,13 @@ def test_place_order_rejects_risk_limit_and_non_string_decimal():
             "limit_price": "100",
             "reasoning": "test decimal type",
         }
-    ) == {"ok": False, "reason": "bad_decimal_or_product"}
+    ) == {
+        "ok": False,
+        "reason": "bad_decimal_or_product",
+        "field": "quantity",
+        "rule": "must be a finite decimal string",
+        "detail": "quantity must be a finite decimal string",
+    }
 
 
 def test_market_order_without_band_price_fails_closed():

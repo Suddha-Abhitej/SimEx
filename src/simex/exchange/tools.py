@@ -17,6 +17,7 @@ from simex.exchange import (
     PairEngine,
     Side,
 )
+from simex.exchange.orders import field_error
 from simex.exchange.risk import RiskLimits
 from simex.exchange.writer import band_price
 from simex.ledger import LedgerHalted
@@ -116,17 +117,20 @@ class ExchangeTools:
             return {"ok": False, "reason": "bad_payload"}
         reasoning = payload.get("reasoning")
         if not isinstance(reasoning, str) or not reasoning.strip():
-            return {"ok": False, "reason": "reasoning_required"}
+            exc = field_error("reasoning_required", "reasoning", "must be a non-empty string")
+            return {"ok": False, "reason": exc.reason, **exc.details}
         if not isinstance(payload.get("quantity"), str) or (
             payload.get("limit_price") is not None
             and not isinstance(payload.get("limit_price"), str)
         ):
-            return {"ok": False, "reason": "bad_decimal_or_product"}
+            name = "quantity" if not isinstance(payload.get("quantity"), str) else "limit_price"
+            exc = field_error("bad_decimal_or_product", name, "must be a finite decimal string")
+            return {"ok": False, "reason": exc.reason, **exc.details}
         try:
             order_request = OrderRequest.parse(payload)
             instrument = self.writer.instruments.get(order_request.product_id)
             if instrument is None:
-                raise OrderError("unknown_product", "Select a configured product_id")
+                raise field_error("unknown_product", "product_id", "must name a configured product")
             order_request.check(instrument)
             quantity = order_request.quantity
             price = order_request.limit_price
@@ -145,7 +149,7 @@ class ExchangeTools:
                         return {"ok": False, "reason": "no_band_price"}
                     price = band_price(best, order_request.side, instrument)
         except OrderError as exc:
-            return {"ok": False, "reason": exc.reason, "detail": exc.detail}
+            return {"ok": False, "reason": exc.reason, **exc.details}
         except (KeyError, TypeError, ValueError):
             return {"ok": False, "reason": "bad_order"}
         if not quantity.is_finite() or (price is not None and not price.is_finite()):
@@ -161,7 +165,7 @@ class ExchangeTools:
         except LedgerHalted:
             return {"ok": False, "reason": "ledger_halted"}
         except OrderError as exc:
-            return {"ok": False, "reason": exc.reason, "detail": exc.detail}
+            return {"ok": False, "reason": exc.reason, **exc.details}
         except ValueError:
             return {"ok": False, "reason": "invalid_order"}
         if order.status is OrderStatus.REJECTED:
