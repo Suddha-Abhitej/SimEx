@@ -134,7 +134,13 @@ class RunnerMetrics:
         )
         self.agent_refusals = Counter(
             "simex_exchange_agent_refusals_total",
-            "Refused baseline agent orders by account and reason",
+            "Exchange-refused baseline agent orders by account and reason",
+            ["account_id", "reason"],
+            registry=r,
+        )
+        self.agent_skipped = Counter(
+            "simex_exchange_agent_skipped_total",
+            "Baseline agent orders skipped locally by account and reason",
             ["account_id", "reason"],
             registry=r,
         )

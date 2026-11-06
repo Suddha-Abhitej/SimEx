@@ -319,20 +319,20 @@ def test_live_owner_writer_enforces_limits_with_mcp_disabled():
     asyncio.run(scenario())
 
 
-def test_runtime_agents_use_the_served_refusal_metrics(monkeypatch):
+def test_runtime_agents_use_the_served_skip_metrics(monkeypatch):
     async def scenario():
-        refused = asyncio.Event()
+        skipped = asyncio.Event()
 
         async def idle_runner(self):
             await asyncio.Future()
 
-        async def refuse_order(self):
-            self._order("buy", Decimal(0), Decimal("100"), "test refusal visibility")
-            refused.set()
+        async def skip_order(self):
+            self._order("buy", Decimal(0), Decimal("100"), "test skip visibility")
+            skipped.set()
             await asyncio.Future()
 
         monkeypatch.setattr(FakeRunner, "run", idle_runner)
-        monkeypatch.setattr(BaselineAgent, "run_forever", refuse_order)
+        monkeypatch.setattr(BaselineAgent, "run_forever", skip_order)
         metrics = RunnerMetrics()
         group = LiveRuntimeGroup(
             RunnerSettings(
@@ -347,13 +347,20 @@ def test_runtime_agents_use_the_served_refusal_metrics(monkeypatch):
         )
         task = asyncio.create_task(group.run())
         try:
-            await asyncio.wait_for(refused.wait(), timeout=5)
+            await asyncio.wait_for(skipped.wait(), timeout=5)
+            assert (
+                metrics.registry.get_sample_value(
+                    "simex_exchange_agent_skipped_total",
+                    {"account_id": "baseline", "reason": "below_min_size"},
+                )
+                == 1
+            )
             assert (
                 metrics.registry.get_sample_value(
                     "simex_exchange_agent_refusals_total",
                     {"account_id": "baseline", "reason": "below_min_size"},
                 )
-                == 1
+                is None
             )
         finally:
             task.cancel()

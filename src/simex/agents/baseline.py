@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from typing import Any
 
+from simex.exchange.accounts import required_reservation
+from simex.exchange.orders import Side
 from simex.exchange.runner_metrics import RunnerMetrics
 from simex.mcp import ExchangeTools
 
@@ -48,8 +50,11 @@ class BaselineAgent:
         self._tick_count = 0
         self._previous_mid: Decimal | None = None
         self._logged_refusals: set[str] = set()
+        self._logged_skips: set[str] = set()
 
     def _observe_order(self, result: dict[str, Any]) -> dict[str, Any]:
+        # Only exchange submissions reach here; local skips preserve buy-and-hold's shot.
+        self._fired = True
         if not result["ok"]:
             # Gate reasons may append changing diagnostics such as age_ns.
             reason = result["reason"].split(":", 1)[0]
@@ -65,6 +70,19 @@ class BaselineAgent:
                 )
         return result
 
+    def _skip(self, reason: str) -> dict[str, Any]:
+        self.metrics.agent_skipped.labels(self.spec.account_id, reason).inc()
+        if reason not in self._logged_skips:
+            self._logged_skips.add(reason)
+            log.warning(
+                "baseline agent %s for account %s skipped order for %s: %s",
+                self.spec.kind,
+                self.spec.account_id,
+                self._product(),
+                reason,
+            )
+        return {"ok": False, "reason": reason}
+
     def _order(
         self, side: str, quantity: Decimal, price: Decimal, reasoning: str
     ) -> dict[str, Any]:
@@ -73,7 +91,12 @@ class BaselineAgent:
             rounding=ROUND_DOWN
         ) * instrument.size_increment
         if quantity < instrument.min_size:
-            return self._observe_order({"ok": False, "reason": "below_min_size"})
+            return self._skip("below_min_size")
+        asset, amount = required_reservation(
+            Side(side), quantity, price, instrument, self.tools.writer.fees
+        )
+        if self.tools.writer.accounts.balance(self.spec.account_id, asset).available < amount:
+            return self._skip("insufficient_funds")
         return self._observe_order(
             self.tools.place_order(
                 {
@@ -120,6 +143,8 @@ class BaselineAgent:
                     ask,
                     "buy_and_hold: buy once at the current best ask",
                 )
+            else:
+                self._fired = True
         elif self.spec.kind == "dca":
             result = self._order(
                 "buy",
@@ -163,7 +188,6 @@ class BaselineAgent:
                             "momentum: sell because mid fell and depth imbalance is at most -0.25",
                         )
                 self._previous_mid = mid
-        self._fired = True
         self._tick_count += 1
         return result
 
