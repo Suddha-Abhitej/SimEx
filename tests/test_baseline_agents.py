@@ -342,21 +342,34 @@ def test_buy_and_hold_existing_position_retires_the_shot():
     assert metric(baseline, "skipped", "insufficient_funds") == 0
 
 
-def test_buy_and_hold_submitted_refusal_retires_the_shot(monkeypatch):
+@pytest.mark.parametrize("reason", ["stale_level2", "feed_lagging"])
+def test_buy_and_hold_exchange_refusal_preserves_shot_until_accepted(reason, caplog):
     baseline = agent("buy_and_hold")
-    calls = []
+    original_gate = baseline.tools.writer.gate
 
-    def refuse(payload):
-        calls.append(payload)
-        return {"ok": False, "reason": "account_halted"}
+    class ClosedGate:
+        def check(self, product_id, now_ns):
+            return GateDecision(False, reason)
 
-    monkeypatch.setattr(baseline.tools, "place_order", refuse)
-    assert baseline.tick() == {"ok": False, "reason": "account_halted"}
-    assert baseline._fired
+    baseline.tools.writer.gate = ClosedGate()
+    assert baseline.tools.quote("BTC-USD")["ok"]
+    refused_ids = []
+    for tick in range(2):
+        result = baseline.tick()
+        assert not result["ok"] and result["reason"] == reason
+        assert result["order"]["status"] == "rejected"
+        refused_ids.append(result["order"]["client_order_id"])
+        assert not baseline._fired and baseline._tick_count == tick + 1
+    baseline.tools.writer.gate = original_gate
+    accepted = baseline.tick()
+    assert accepted["ok"] and accepted["order"]["status"] == "pending"
+    assert baseline._fired and baseline._tick_count == 3
+    assert len(set(refused_ids + [accepted["order"]["client_order_id"]])) == 3
     assert baseline.tick() == {"ok": True, "action": "none"}
-    assert len(calls) == 1
-    assert metric(baseline, "refusals", "account_halted") == 1
-    assert metric(baseline, "skipped", "account_halted") == 0
+    assert len(baseline.tools.writer.orders) == 3
+    assert metric(baseline, "refusals", reason) == 2
+    assert metric(baseline, "skipped", reason) == 0
+    assert len(caplog.records) == 1 and reason in caplog.records[0].getMessage()
 
 
 def test_random_funding_skips_preserve_decisions_and_rng_progress(monkeypatch):
