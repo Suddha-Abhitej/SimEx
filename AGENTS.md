@@ -40,6 +40,8 @@ reads that path; the hard rules below are repeated here so they are never missed
 - Never commit to `main`. Branch as `<type>/<short-name>` and open a pull request.
 - Always `git checkout main && git pull` before creating a branch.
 - Reference the issue in the PR (`Closes #N`), one issue per PR.
+- **Never merge a pull request.** The owner merges. Push the branch, open the PR, report CI
+  status, and stop, even when CI is green and a review says the work is ready.
 - Before opening a PR run `ruff check .`, `ruff format --check .` and `pytest`; all must pass.
   Postgres-backed tests need `SIMEX_TEST_POSTGRES_DSN` and `SIMEX_REQUIRE_POSTGRES_TESTS=1`, or
   they skip silently and the run means nothing.

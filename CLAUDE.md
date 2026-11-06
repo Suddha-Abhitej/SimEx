@@ -39,6 +39,9 @@ saying so explicitly.
 - Always `git checkout main && git pull` before creating a branch.
 - Reference the GitHub issue in the PR (`Closes #N`).
 - Keep PRs small: one issue, one PR.
+- **Never merge a pull request.** The owner merges. Push the branch, open the PR, report CI
+  status, and stop. This holds even when CI is green, a review says the work is ready, and
+  every requested change is made: "ready to merge" is a verdict, not authorization.
 - Before opening a PR, run `ruff check .`, `ruff format --check .` and `pytest`; all must pass.
 - A significant design choice gets a short ADR in `docs/adr/` using `template.md`, and a row in
   `docs/adr/README.md`.

@@ -42,6 +42,9 @@ three in step.
 - Never commit to `main`. Branch as `<type>/<short-name>` (`feat/`, `fix/`, `docs/`, `infra/`).
 - Always `git checkout main && git pull` before creating a branch.
 - One issue, one PR. Reference it (`Closes #N`).
+- **Never merge a pull request.** The owner merges. Push the branch, open the PR, report CI
+  status, and stop. This holds even when CI is green, a review says the work is ready, and
+  every requested change is made: "ready to merge" is a verdict, not authorization.
 - Before opening a PR: `ruff check .`, `ruff format --check .` and `pytest` must all pass.
 - A significant design choice gets a short ADR in `docs/adr/` from `template.md`, plus a row in
   `docs/adr/README.md`. If it changes an accepted ADR, mark that ADR amended or superseded in
