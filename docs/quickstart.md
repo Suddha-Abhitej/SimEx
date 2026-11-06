@@ -137,6 +137,42 @@ Fill quantity/fees count only the configured product's live-observed fills, not 
 or complete ledger totals. Accepted orders can fill after exit. Keep this output private and use
 `python -m simex.evaluator` for P&L and evaluation, as described below.
 
+## Inspect execution, then assess performance
+
+After running your bot, inspect the committed ledger without recordings:
+
+```bash
+python -m simex.report                         # all non-system accounts with orders
+python -m simex.report --account my-bot --hours 24
+python -m simex.report --account my-bot --since 2026-11-05T00:00:00Z --decisions 10
+python -m simex.report --account my-bot --json /your/private/path/execution.json
+python -m simex.evaluator --account my-bot       # performance needs private recordings
+```
+
+Use the same `EXCHANGE_LEDGER_DSN` as the exchange, or pass `--dsn`. `--since` (with an
+explicit timezone) and `--hours` are mutually exclusive. The window selects **orders by creation
+time**, then includes all their committed fills through the read-only snapshot. Pre-window
+orders that fill later are excluded; outcomes are the current committed statuses. `--decisions 0`
+suppresses the log; the default shows the latest 20 orders with their full original rationale.
+`decide()` returning `None` and locally rejected intents never reach the exchange or this log.
+
+Three tools answer three questions. Your bot's **own session summary** shows client-observed
+validation refusals and local skips. **`python -m simex.report`** shows what the exchange recorded:
+order outcomes, persisted rejections and details, maker/taker mix, fees, execution bounds and
+timing. Request-validation refusals (and other early errors such as reused idempotency keys) have
+no new order row and cannot appear in that report. **`python -m simex.evaluator`** assesses
+performance using [ADR 0020](adr/0020-evaluator-price-series-and-significance.md); single-session
+differences can reflect exposure rather than skill.
+
+Market figures measure distance to the band's **worst permitted price**, so negative bps mean
+unused band headroom, not a slippage win. Completed orders from before the band-retention fix
+have no recorded benchmark: the report states the excluded count and never backfills a price.
+Fee references are your current configuration, not reconstructed historical rates. Scheduled
+anti-cheat delay is a deadline check, not processing latency; unfilled orders have no fabricated
+time-to-fill. Output and the optional local JSON contain private market-derived data: keep both
+private under [ADR 0010](adr/0010-personal-use-and-gemini-market-data.md). There is no default
+output file or upload.
+
 ## HTTP client
 
 ```python
