@@ -1,0 +1,645 @@
+{
+  "id": null,
+  "uid": "simex-feed",
+  "title": "SimEx / Feed health",
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "simex",
+    "system-metrics"
+  ],
+  "description": "Private system metrics only (ADR 0010). Prometheus owns alerting; Grafana visualises.",
+  "links": [
+    {
+      "title": "Feed health",
+      "type": "link",
+      "url": "/d/simex-feed",
+      "keepTime": true
+    },
+    {
+      "title": "Exchange",
+      "type": "link",
+      "url": "/d/simex-exchange",
+      "keepTime": true
+    },
+    {
+      "title": "Ledger",
+      "type": "link",
+      "url": "/d/simex-ledger",
+      "keepTime": true
+    },
+    {
+      "title": "Recorder",
+      "type": "link",
+      "url": "/d/simex-recorder",
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "title": "Coverage and clock",
+      "type": "text",
+      "options": {
+        "mode": "markdown",
+        "content": "Gemini feed and system health only. Absolute feed lag needs a synchronized host clock; persistent negative lag indicates skew (#74). Histogram quantiles are bucket estimates. **Consumer lag:** unread-offset counts exist for the recorder only; exchange caught-up flags and watermark lag below are different measurements. The book service has no numeric consumer-lag metric. Prometheus owns alerts."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "title": "Scrape health (1 = reachable)",
+      "type": "timeseries",
+      "description": "A missing service is not a healthy zero. These are Prometheus scrape-generated metrics.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "up{job=~\"simex-ingest|simex-book|simex-exchange|simex-recorder\"}",
+          "legendFormat": "{{job}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Feed lag p50 / p99",
+      "type": "timeseries",
+      "description": "Receive clock minus venue clock; requires clock sync. Negative samples are visible in latest feed lag; histogram buckets cannot resolve a negative quantile.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le, channel) (rate(simex_ingest_feed_lag_seconds_bucket{venue=\"gemini\"}[$__rate_interval])))",
+          "legendFormat": "{{channel}} p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, channel) (rate(simex_ingest_feed_lag_seconds_bucket{venue=\"gemini\"}[$__rate_interval])))",
+          "legendFormat": "{{channel}} p99",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Latest feed lag",
+      "type": "timeseries",
+      "description": "Keep negative values visible: a host behind the venue can make freshness look better than it is.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_ingest_last_feed_lag_seconds{venue=\"gemini\"}",
+          "legendFormat": "{{channel}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Gap detections / resyncs per second",
+      "type": "timeseries",
+      "description": "Injected gaps stay separate from real feed gaps (ADR 0008).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kind, cause) (rate(simex_ingest_gaps_total{venue=\"gemini\"}[$__rate_interval]))",
+          "legendFormat": "gaps {{kind}} / {{cause}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (method, trigger) (rate(simex_ingest_resyncs_total{venue=\"gemini\"}[$__rate_interval]))",
+          "legendFormat": "resync {{method}} / {{trigger}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Snapshot recovery / message age",
+      "type": "timeseries",
+      "description": "Waiting is a 0/1 state; age is seconds. Trades may legitimately be silent for minutes. Snapshot baseline age is not a staleness signal.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_ingest_awaiting_snapshot{venue=\"gemini\"}",
+          "legendFormat": "{{product_id}} waiting (1)",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_ingest_last_message_age_seconds{venue=\"gemini\",channel=\"level2\"}",
+          "legendFormat": "{{product_id}} level2 age (s)",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Resync duration p99",
+      "type": "timeseries",
+      "description": "Detection to recovery of every affected product; no samples means unavailable.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, method) (rate(simex_ingest_resync_duration_seconds_bucket{venue=\"gemini\"}[$__rate_interval])))",
+          "legendFormat": "{{method}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 16,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Watermark lag",
+      "type": "timeseries",
+      "description": "Wall time minus release watermark; includes the configured hold-back and fetch wait. This is not tick-to-fill latency. Prometheus alerts: ExchangeWatermarkStalled.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_watermark_lag_seconds",
+          "legendFormat": "{{product_id}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Exchange partitions caught up / held records",
+      "type": "timeseries",
+      "description": "Caught-up is binary; held records are consumed but not released. Neither is unread Kafka offset lag.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_partition_caught_up",
+          "legendFormat": "{{topic}} / {{partition}} caught up (1)",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_held_records",
+          "legendFormat": "{{product_id}} held records",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Steady-state delivery p50 / p99",
+      "type": "timeseries",
+      "description": "Consume time minus ingestor receive time. Catch-up fetches are excluded (ADR 0015).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le, channel) (rate(simex_exchange_delivery_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{channel}} p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, channel) (rate(simex_exchange_delivery_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{channel}} p99",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Book audit mismatches (last hour)",
+      "type": "timeseries",
+      "description": "Must remain zero; no aligned evidence is a separate condition below. Prometheus alerts: BookAuditMismatch.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (venue, product_id) (increase(simex_book_audits_total{venue=\"gemini\",outcome=\"mismatch\"}[1h]))",
+          "legendFormat": "{{product_id}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 11,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Aligned book audits (last hour)",
+      "type": "timeseries",
+      "description": "The alert requires at least ten aligned audits/product/hour; the book-state fallback exposes zero aligned audits. Prometheus alerts: BookAuditsNotAligning.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (venue, product_id) (increase(simex_book_audits_total{venue=\"gemini\",reason=\"aligned\"}[1h])) or sum by (venue, product_id) (simex_book_state{venue=\"gemini\"}) * 0",
+          "legendFormat": "{{product_id}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 12,
+      "gridPos": {
+        "x": 8,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      }
+    }
+  ]
+}

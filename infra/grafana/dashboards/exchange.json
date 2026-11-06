@@ -1,0 +1,516 @@
+{
+  "id": null,
+  "uid": "simex-exchange",
+  "title": "SimEx / Exchange",
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "simex",
+    "system-metrics"
+  ],
+  "description": "Private system metrics only (ADR 0010). Prometheus owns alerting; Grafana visualises.",
+  "links": [
+    {
+      "title": "Feed health",
+      "type": "link",
+      "url": "/d/simex-feed",
+      "keepTime": true
+    },
+    {
+      "title": "Exchange",
+      "type": "link",
+      "url": "/d/simex-exchange",
+      "keepTime": true
+    },
+    {
+      "title": "Ledger",
+      "type": "link",
+      "url": "/d/simex-ledger",
+      "keepTime": true
+    },
+    {
+      "title": "Recorder",
+      "type": "link",
+      "url": "/d/simex-recorder",
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "title": "Missing instrumentation / refusal coverage",
+      "type": "text",
+      "options": {
+        "mode": "markdown",
+        "content": "**Submitted and accepted orders: not instrumented. Tick-to-fill latency: not instrumented.** [Follow-up #111](https://github.com/Suddha-Abhitej/SimEx/issues/111) prioritises counters (a refusal denominator) and tracks the larger matching-path histogram. Rejection counts alone are not a refusal fraction. These panels count writer-emitted rejections, including effect-time failures; early request-validation refusals are visible only to the requesting client. Journal eviction can undercount them; see the gap panel. No trading-path instrumentation is added here."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "title": "Writer rejections per second, by reason",
+      "type": "timeseries",
+      "description": "Stable reason prefixes, not changing age suffixes. This is a count rate, not rejected/submitted. It excludes early request-validation refusals.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product_id, reason) (rate(simex_exchange_rejections_total[$__rate_interval]))",
+          "legendFormat": "{{product_id}} / {{reason}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Gate open (1 = open, 0 = closed)",
+      "type": "timeseries",
+      "description": "Feed safety guard. A missing series is unavailable, not open. Prometheus alerts: ExchangeGateClosedTooLong.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_gate_state{state=\"open\"}",
+          "legendFormat": "{{product_id}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Gate closure seconds per second",
+      "type": "timeseries",
+      "description": "Reason-labelled duration, not the order-refusal fraction.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product_id, reason) (rate(simex_exchange_gate_closed_seconds_total[$__rate_interval]))",
+          "legendFormat": "{{product_id}} / {{reason}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Order delay / rolling feed-lag p99",
+      "type": "timeseries",
+      "description": "Configured anti-cheat delay, not an observed execution latency. Clock skew invalidates absolute lag. See the baseline-established panel. Prometheus alerts: ExchangeOrderDelayBelowFeedLagP99.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_order_delay_seconds",
+          "legendFormat": "{{product_id}} delay",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_feed_lag_p99_seconds",
+          "legendFormat": "{{product_id}} feed p99",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Lag baseline established (1 = yes)",
+      "type": "timeseries",
+      "description": "Excess-lag checking needs ten minutes of samples; other gate safeguards operate before then.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_lag_baseline_established",
+          "legendFormat": "{{product_id}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Late records (last 10 minutes)",
+      "type": "timeseries",
+      "description": "Ordering margin lost, not a dropped record. The Prometheus rule alerts above 20 across products in ten minutes. Prometheus alerts: ExchangeLateRecords.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product_id, channel) (increase(simex_exchange_late_events_total[10m]))",
+          "legendFormat": "{{product_id}} / {{channel}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 16,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Writer events missed by metric consumer",
+      "type": "timeseries",
+      "description": "Events evicted before rejection collection. A positive count means rejection totals may be incomplete; it cannot be used to recover a missing denominator.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(simex_exchange_writer_event_gaps_total[$__range])",
+          "legendFormat": "evicted events",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Released market records per second",
+      "type": "timeseries",
+      "description": "Market records, not submitted orders or fills.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product_id, channel) (rate(simex_exchange_events_total[$__rate_interval]))",
+          "legendFormat": "{{product_id}} / {{channel}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Out-of-order / undecodable records",
+      "type": "timeseries",
+      "description": "Out-of-order is the process cumulative count; undecodable is an increase over the selected range.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_exchange_out_of_order_records",
+          "legendFormat": "out of order",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (product_id) (increase(simex_exchange_undecodable_records_total[$__range]))",
+          "legendFormat": "{{product_id}} undecodable",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    }
+  ]
+}

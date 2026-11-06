@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate docker compose file
-        run: docker compose config --quiet
+        run: docker compose --profile monitoring config --quiet
       - name: Check Prometheus config and alert rules
         run: |
           promtool() {
@@ -110,3 +110,33 @@ jobs:
             tests+=("/etc/prometheus/tests/$(basename "$test")")
           done
           promtool test rules "${tests[@]}"
+      - name: Check every Grafana PromQL expression
+        run: |
+          query_dir="$(mktemp -d)"
+          trap 'rm -rf "$query_dir"' EXIT
+          # JSON is valid YAML. Temporary recording rules let promtool parse every query
+          # without adding a second PromQL parser or provisioning any new alert rules.
+          python3 - "$query_dir/dashboards.yml" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          def panels(dashboard):
+              for panel in dashboard["panels"]:
+                  yield panel
+                  if "panels" in panel:
+                      yield from panels(panel)
+
+          rules = []
+          for path in sorted(Path("infra/grafana/dashboards").glob("*.json")):
+              dashboard = json.loads(path.read_text())
+              for panel in panels(dashboard):
+                  for target in panel.get("targets", []):
+                      expression = target["expr"].replace("$__rate_interval", "5m")
+                      expression = expression.replace("$__range", "1h")
+                      rules.append({"record": f"dashboard_query_{len(rules)}", "expr": expression})
+          assert rules, "no dashboard queries found"
+          Path(sys.argv[1]).write_text(json.dumps({"groups": [{"name": "dashboards", "rules": rules}]}))
+          PY
+          docker run --rm -v "$query_dir/dashboards.yml:/queries/dashboards.yml:ro" --entrypoint promtool \
+            prom/prometheus:v2.53.4 check rules /queries/dashboards.yml
