@@ -8,9 +8,21 @@ from websockets.exceptions import ConnectionClosed
 from simex.client import APIError, Client, StreamGap
 
 
+def required_env(*names: str) -> list[str]:
+    """Exit with the fix rather than a KeyError: a missing variable is the usual first error."""
+    try:
+        return [os.environ[name] for name in names]
+    except KeyError as missing:
+        raise SystemExit(
+            f"Set {missing.args[0]} in this terminal before running the bot. This example reads "
+            "the environment directly rather than the exchange's .env, because your bot runs "
+            "outside SimEx. See docs/quickstart.md."
+        ) from None
+
+
 def main():
-    url = f"http://127.0.0.1:{os.environ['EXCHANGE_API_PORT']}"
-    with Client(url, os.environ["EXCHANGE_API_TOKEN"]) as client:
+    port, token = required_env("EXCHANGE_API_PORT", "EXCHANGE_API_TOKEN")
+    with Client(f"http://127.0.0.1:{port}", token) as client:
         print("Quote:", client.quote("BTC-USD"))
         with client.stream() as stream:  # Receive hello before submitting.
             if stream.hello["writer_halted"] or stream.hello["account_halted"]:
