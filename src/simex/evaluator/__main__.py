@@ -50,6 +50,13 @@ async def _read_ledger(dsn: str) -> tuple[list[FillRecord], dict[str, dict[str, 
 
     try:
         connection = await asyncpg.connect(dsn)
+    except Exception:
+        # Connection errors can echo the DSN. Query failures below retain their useful cause.
+        raise EvaluationError(
+            "Could not connect to the ledger; check --dsn / EXCHANGE_LEDGER_DSN."
+        ) from None
+
+    try:
         try:
             async with connection.transaction(isolation="repeatable_read", readonly=True):
                 rows = await connection.fetch(
@@ -70,11 +77,9 @@ async def _read_ledger(dsn: str) -> tuple[list[FillRecord], dict[str, dict[str, 
         for row in seeds:
             balances[row["account_id"]][row["asset"]] = row["amount"]
         return [FillRecord.from_row(row) for row in rows], dict(balances)
-    except Exception:
-        # Driver errors can echo connection strings. Keep credentials out of the diagnostic.
+    except Exception as exc:
         raise EvaluationError(
-            "Could not read committed fills and seeds; check --dsn / EXCHANGE_LEDGER_DSN "
-            "and the existing ledger schema."
+            f"Could not read committed fills and seeds: {type(exc).__name__}: {exc}"
         ) from None
 
 
@@ -180,7 +185,11 @@ def _evaluate(args: argparse.Namespace, fills: list[FillRecord], seeds: dict) ->
             f"before the requested final boundary: "
             f"{_timestamp(final_boundary)} -> {_timestamp(covered_boundary)}."
         )
-        print("Use --account to narrow to accounts unaffected by the limiting product.")
+        affected_accounts = {
+            fill.account_id for fill in fills if fill.product_id == limiting_product
+        }
+        if set(accounts) - affected_accounts:
+            print("Use --account to narrow to accounts unaffected by the limiting product.")
         # Keep the same exclusive-end convention when a last mark is itself a sample boundary.
         end_ns = covered_boundary + 1
     included = [fill for fill in fills if start_ns <= fill.ts_ns < end_ns]
@@ -223,6 +232,10 @@ def run(argv: list[str] | None = None) -> int:
         "--account", action="append", help="account to evaluate; repeat to select several"
     )
     args = parser.parse_args(argv)
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     load_environment(logging.getLogger("simex.evaluator"))
     dsn = args.dsn if args.dsn is not None else os.environ.get("EXCHANGE_LEDGER_DSN", "")
     try:

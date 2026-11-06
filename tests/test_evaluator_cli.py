@@ -210,6 +210,16 @@ def test_clamp_keeps_fill_exactly_on_covered_final_boundary(filled, tmp_path):
     assert "Comparison with baseline: n=30" in result.stdout
 
 
+@pytest.mark.parametrize("selection", [[], ["--account", "agent"]])
+def test_clamp_hint_is_omitted_when_all_selected_accounts_need_product(filled, tmp_path, selection):
+    dsn, _ = filled
+    root = recordings(tmp_path / "short", last_seconds=1800)
+    result = command(tmp_path, "--dsn", dsn, "--recordings", root, *selection)
+    assert result.returncode == 0, result.stderr
+    assert "Clamping end: BTC-USD" in result.stdout
+    assert "Use --account" not in result.stdout
+
+
 def test_account_selection_and_system_rows_are_excluded(filled, tmp_path):
     dsn, root = filled
 
@@ -315,8 +325,65 @@ def test_connection_failure_does_not_echo_credentials(tmp_path):
         "--recordings",
         root,
     )
-    assert_error(result, "Could not read committed fills and seeds")
+    assert_error(result, "Could not connect to the ledger")
     assert "synthetic-secret" not in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(
+    "statement,error_type,detail",
+    [
+        (
+            "ALTER TABLE fills RENAME COLUMN price TO synthetic_old_price",
+            "UndefinedColumnError",
+            'column "price" does not exist',
+        ),
+        (
+            "ALTER TABLE ledger_postings RENAME TO synthetic_old_postings",
+            "UndefinedTableError",
+            'relation "ledger_postings" does not exist',
+        ),
+    ],
+)
+def test_query_failure_names_cause_without_traceback(
+    cli_dsn, tmp_path, statement, error_type, detail
+):
+    with closing(SyncLedger(cli_dsn)) as ledger:
+        ledger.migrate()
+
+    async def alter_schema():
+        connection = await asyncpg.connect(cli_dsn)
+        try:
+            await connection.execute(statement)
+        finally:
+            await connection.close()
+
+    asyncio.run(alter_schema())
+    root = tmp_path / "recordings"
+    root.mkdir()
+    result = command(tmp_path, "--dsn", cli_dsn, "--recordings", root)
+    assert_error(result, error_type)
+    assert detail in result.stderr
+    assert "check --dsn" not in result.stderr
+
+
+def test_loaded_environment_is_logged_before_missing_dsn_error(tmp_path):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("SYNTHETIC_CLI_SETTING=1\n")
+    # Keep the real loader, but point its file discovery at this synthetic environment.
+    code = (
+        "import dotenv.main; from simex.evaluator import __main__ as cli; "
+        f"dotenv.main.find_dotenv = lambda: {str(dotenv)!r}; raise SystemExit(cli.run())"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env=dict(os.environ, EXCHANGE_LEDGER_DSN="", LOG_LEVEL="INFO"),
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert_error(result, "Set --dsn or EXCHANGE_LEDGER_DSN")
+    assert "INFO simex.evaluator: loaded environment from .env" in result.stderr
 
 
 def test_no_fills_exits_plainly(cli_dsn, tmp_path):
