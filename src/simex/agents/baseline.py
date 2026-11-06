@@ -53,9 +53,10 @@ class BaselineAgent:
         self._logged_skips: set[str] = set()
 
     def _observe_order(self, result: dict[str, Any]) -> dict[str, Any]:
-        # Only exchange submissions reach here; local skips preserve buy-and-hold's shot.
-        self._fired = True
-        if not result["ok"]:
+        # Acceptance retires buy-and-hold's shot; skips and refusals leave it armed.
+        if result["ok"]:
+            self._fired = True
+        else:
             # Gate reasons may append changing diagnostics such as age_ns.
             reason = result["reason"].split(":", 1)[0]
             self.metrics.agent_refusals.labels(self.spec.account_id, reason).inc()
