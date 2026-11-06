@@ -1,0 +1,560 @@
+{
+  "id": null,
+  "uid": "simex-ledger",
+  "title": "SimEx / Ledger",
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "simex",
+    "system-metrics"
+  ],
+  "description": "Private system metrics only (ADR 0010). Prometheus owns alerting; Grafana visualises.",
+  "links": [
+    {
+      "title": "Feed health",
+      "type": "link",
+      "url": "/d/simex-feed",
+      "keepTime": true
+    },
+    {
+      "title": "Exchange",
+      "type": "link",
+      "url": "/d/simex-exchange",
+      "keepTime": true
+    },
+    {
+      "title": "Ledger",
+      "type": "link",
+      "url": "/d/simex-ledger",
+      "keepTime": true
+    },
+    {
+      "title": "Recorder",
+      "type": "link",
+      "url": "/d/simex-recorder",
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "title": "Durability and reconciliation",
+      "type": "text",
+      "options": {
+        "mode": "markdown",
+        "content": "Ledger metrics exist only when persistence is configured. Missing/NaN data is unavailable, never a clean bill of health. Latency quantiles are histogram bucket estimates; sample counts matter. **Commit latency is not tick-to-fill latency.** Prometheus owns all alert thresholds and duration rules; these panels do not define Grafana alerts."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "title": "Reconciliation runs since process start",
+      "type": "timeseries",
+      "description": "Zero after startup means reconciliation has never completed. Prometheus alerts: ExchangeLedgerReconciliationNeverStarted.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_ledger_reconciliation_runs_total",
+          "legendFormat": "completed runs",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Last successful reconciliation age",
+      "type": "timeseries",
+      "description": "NaN before the first success. The separate completed-runs panel covers never-started reconciliation. Prometheus alerts: ExchangeLedgerReconciliationStale.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "time() - simex_ledger_reconciliation_last_success_timestamp_seconds",
+          "legendFormat": "age",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Active mismatches / overrides / double-entry violations",
+      "type": "timeseries",
+      "description": "An override does not erase the finding. Totals omit account and transaction identifiers from legends. Prometheus alerts: ExchangeLedgerBalanceMismatch.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(simex_ledger_reconciliation_mismatch_active)",
+          "legendFormat": "mismatches",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(simex_ledger_reconciliation_override_active)",
+          "legendFormat": "audited overrides",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_ledger_double_entry_violation_active",
+          "legendFormat": "double-entry violation",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Commit latency p50 / p99",
+      "type": "timeseries",
+      "description": "50 ms p99 is the existing alert budget. Clock/sample resolution still matters (#75). Prometheus alerts: ExchangeLedgerCommitP99TooHigh.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(simex_ledger_latency_seconds_bucket{phase=\"commit\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(simex_ledger_latency_seconds_bucket{phase=\"commit\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Commit samples (selected range)",
+      "type": "timeseries",
+      "description": "No samples means the latency is unavailable; an empty quantile is not zero latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(simex_ledger_latency_seconds_count{phase=\"commit\"}[$__range]))",
+          "legendFormat": "samples",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Writer acknowledgement / intent-to-ack p99",
+      "type": "timeseries",
+      "description": "Synchronous ledger boundaries, separate from anti-cheat delay, watermark hold-back and network delivery.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le, phase) (rate(simex_ledger_latency_seconds_bucket{phase=~\"writer_ack|intent_to_ack\"}[$__rate_interval])))",
+          "legendFormat": "{{phase}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 16,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "New reconciliation findings (selected range)",
+      "type": "timeseries",
+      "description": "New findings over the range; active findings remain visible separately.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(increase(simex_ledger_reconciliation_mismatches_total[$__range]))",
+          "legendFormat": "balance mismatches",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(simex_ledger_double_entry_violations_total[$__range])",
+          "legendFormat": "double-entry violations",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Ledger halts / timeouts / conflicts (selected range)",
+      "type": "timeseries",
+      "description": "Failure counters; a halt requires intervention, not a client retry loop.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(simex_ledger_halts_total[$__range])",
+          "legendFormat": "halts",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(simex_ledger_timeouts_total[$__range])",
+          "legendFormat": "timeouts",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(simex_ledger_conflicts_total[$__range])",
+          "legendFormat": "conflicts",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Reconciliation duration p99",
+      "type": "timeseries",
+      "description": "Duration of full reconciliation. The accepted cadence was measured on a near-empty x86 ledger, not the production ARM64 history size.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(simex_ledger_reconciliation_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    }
+  ]
+}

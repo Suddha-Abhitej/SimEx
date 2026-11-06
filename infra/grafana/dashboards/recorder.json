@@ -1,0 +1,538 @@
+{
+  "id": null,
+  "uid": "simex-recorder",
+  "title": "SimEx / Recorder",
+  "schemaVersion": 40,
+  "version": 1,
+  "editable": false,
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "tags": [
+    "simex",
+    "system-metrics"
+  ],
+  "description": "Private system metrics only (ADR 0010). Prometheus owns alerting; Grafana visualises.",
+  "links": [
+    {
+      "title": "Feed health",
+      "type": "link",
+      "url": "/d/simex-feed",
+      "keepTime": true
+    },
+    {
+      "title": "Exchange",
+      "type": "link",
+      "url": "/d/simex-exchange",
+      "keepTime": true
+    },
+    {
+      "title": "Ledger",
+      "type": "link",
+      "url": "/d/simex-ledger",
+      "keepTime": true
+    },
+    {
+      "title": "Recorder",
+      "type": "link",
+      "url": "/d/simex-recorder",
+      "keepTime": true
+    }
+  ],
+  "panels": [
+    {
+      "title": "Read lag and hourly publication",
+      "type": "text",
+      "options": {
+        "mode": "markdown",
+        "content": "Unread offsets and level2 read age diagnose recorder backlog together. Quiet trades can be silent for minutes and must not drive a stale-recorder alarm. **Publication age can approach an hour in normal operation:** files publish hourly (ADR 0013), also on clean close. It is not an end-to-end publish-latency metric. No prices or recorded payloads appear here."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      }
+    },
+    {
+      "title": "Records written per second",
+      "type": "timeseries",
+      "description": "Counts records accepted into recording files; last-write age below separately tracks flushing rows to disk.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (channel, type) (rate(simex_recorder_records_total[$__rate_interval]))",
+          "legendFormat": "{{channel}} / {{type}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Records written since process start",
+      "type": "timeseries",
+      "description": "Process counters, not a count of all historical files on disk.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (channel) (simex_recorder_records_total)",
+          "legendFormat": "{{channel}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Unread Kafka offsets",
+      "type": "timeseries",
+      "description": "End offset minus consumer position. Zero while a feed is quiet differs from a stalled consumer with unread records. Prometheus alerts: RecordingLagging.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_recorder_lag_records",
+          "legendFormat": "{{topic}} / {{partition}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Level2 read age / unread level2 offsets",
+      "type": "timeseries",
+      "description": "Age in seconds and unread counts are separate series. RecordingLagging requires age >120 s AND unread records, sustained for five minutes. Prometheus alerts: RecordingLagging.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_recorder_lag_seconds{channel=\"level2\"}",
+          "legendFormat": "read age (s)",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(simex_recorder_lag_records{topic=\"md.level2\"})",
+          "legendFormat": "unread offsets",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Time since disk write / file publication",
+      "type": "timeseries",
+      "description": "Row-group/file-close writes and atomic publication are distinct. An hourly publication age is normal, not a continuous lag alarm.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_recorder_seconds_since_last_write",
+          "legendFormat": "disk write",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_recorder_seconds_since_last_file",
+          "legendFormat": "publication (hourly)",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 8,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Files published (last hour)",
+      "type": "timeseries",
+      "description": "Hourly/clean-close publications, not fills or market messages.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (channel) (increase(simex_recorder_files_total[1h]))",
+          "legendFormat": "{{channel}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 16,
+        "y": 12,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Open recording files",
+      "type": "timeseries",
+      "description": "Files waiting for their hourly boundary or clean close.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "simex_recorder_open_files",
+          "legendFormat": "open files",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Lost offsets / skipped records (selected range)",
+      "type": "timeseries",
+      "description": "Expired offsets are an upper bound on lost input. Intentional skips keep their own reason labels.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (topic) (increase(simex_recorder_lost_offsets_total[$__range]))",
+          "legendFormat": "{{topic}} lost (upper bound)",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (topic, reason) (increase(simex_recorder_skipped_total[$__range]))",
+          "legendFormat": "{{topic}} / {{reason}} skipped",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9,
+      "gridPos": {
+        "x": 8,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    },
+    {
+      "title": "Duplicate skips / retention errors (selected range)",
+      "type": "timeseries",
+      "description": "Duplicate skips can follow restart; retention errors are retried without changing recording history.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "simex-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (topic) (increase(simex_recorder_duplicates_skipped_total[$__range]))",
+          "legendFormat": "{{topic}} duplicates",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "simex-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "increase(simex_recorder_retention_errors_total[$__range])",
+          "legendFormat": "retention errors",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 10,
+      "gridPos": {
+        "x": 16,
+        "y": 20,
+        "w": 8,
+        "h": 8
+      }
+    }
+  ]
+}

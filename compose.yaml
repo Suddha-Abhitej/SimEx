@@ -138,6 +138,9 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       prometheus:
         condition: service_healthy
