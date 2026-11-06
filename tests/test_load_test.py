@@ -20,6 +20,7 @@ from test_client import serving
 from test_exchange_runner import level2, trade
 from test_mcp_ledger import OpenGate, _dsn_or_skip
 
+from simex.client import StreamGap
 from simex.exchange.merge import Arrival
 from simex.exchange.risk import RiskLimits
 from simex.exchange.runner_config import RunnerSettings
@@ -463,3 +464,24 @@ def test_verified_system_clock_status_is_recorded(monkeypatch):
         driver.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout="yes\n")
     )
     assert driver.clock_status() == {"verified": True, "source": "timedatectl NTPSynchronized=yes"}
+
+
+def test_shutdown_does_not_suppress_a_gap_and_before_after_metrics_stay_sanitized():
+    receiver = driver.FillReceiver.__new__(driver.FillReceiver)
+    receiver.stopping, receiver.error = True, None
+
+    def gap():
+        raise StreamGap({"reason": "events_evicted"})
+        yield  # Iterator interface, raising on its first read.
+
+    receiver.stream = gap()
+    receiver.run()
+    assert receiver.error == "StreamGap"
+    for samples in (
+        [(0, {"simex_ingest_last_feed_lag_seconds": [0.1]})],
+        [(1, {"simex_ingest_last_feed_lag_seconds": [-0.7]})],
+    ):
+        result = driver.metric_ranges(samples, False)
+        value = result["simex_ingest_last_feed_lag_seconds"]
+        assert value["minimum"] is value["maximum"] is None
+        assert "unavailable" in value

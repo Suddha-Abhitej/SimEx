@@ -35,6 +35,7 @@ from pathlib import Path
 import httpx
 from load_test_runtime import check_empty_database, committed_orders, validate_destination
 from prometheus_client.parser import text_string_to_metric_families
+from websockets.exceptions import ConnectionClosed
 
 from simex.client import APIError, Client
 from simex.exchange import DEFAULT_INSTRUMENTS
@@ -179,7 +180,7 @@ class FillReceiver:
             for frame in self.stream:
                 self.apply(frame)
         except Exception as exc:
-            if not self.stopping:
+            if not self.stopping or not isinstance(exc, ConnectionClosed):
                 self.error = type(exc).__name__
 
     def close(self):
@@ -370,6 +371,32 @@ def run_phase(url, token, product, quantity, rate, clients, seconds, prefix, rec
     }
 
 
+def metric_ranges(samples, clock_verified):
+    metrics = defaultdict(list)
+    for _, values in samples:
+        for name, points in values.items():
+            metrics[name].extend(points)
+    negative = any(
+        value < 0 for name, values in metrics.items() if "feed_lag" in name for value in values
+    )
+    summary = {}
+    for name, values in metrics.items():
+        finite = [value for value in values if math.isfinite(value)]
+        summary[name] = {
+            "samples": len(values),
+            "minimum": min(finite) if finite else None,
+            "maximum": max(finite) if finite else None,
+        }
+        if "feed_lag" in name and (not clock_verified or negative):
+            summary[name] = {
+                "samples": len(values),
+                "minimum": None,
+                "maximum": None,
+                "unavailable": "unverified host clock or negative lag",
+            }
+    return summary
+
+
 def summarise(phase, orders, fills, observations, received, samples, clock_verified):
     attempts = phase["results"]
     ids = {item["client_order_id"] for item in attempts}
@@ -391,30 +418,9 @@ def summarise(phase, orders, fills, observations, received, samples, clock_verif
     acknowledged = {item["client_order_id"] for item in attempts if item["outcome"] == "accepted"}
     if acknowledged - {row["client_order_id"] for row in rows}:
         raise ValueError("accepted order missing from committed ledger; invalid measurement")
-    metrics = defaultdict(list)
-    for at, values in samples:
-        if start <= at <= end:
-            for name, points in values.items():
-                metrics[name].extend(points)
-    negative = any(
-        value < 0 for name, values in metrics.items() if "feed_lag" in name for value in values
+    metric_summary = metric_ranges(
+        [(at, values) for at, values in samples if start <= at <= end], clock_verified
     )
-    usable_lag = clock_verified and not negative
-    metric_summary = {}
-    for name, values in metrics.items():
-        finite = [value for value in values if math.isfinite(value)]
-        metric_summary[name] = {
-            "samples": len(values),
-            "minimum": min(finite) if finite else None,
-            "maximum": max(finite) if finite else None,
-        }
-        if "feed_lag" in name and not usable_lag:
-            metric_summary[name] = {
-                "samples": len(values),
-                "minimum": None,
-                "maximum": None,
-                "unavailable": "unverified host clock or negative lag",
-            }
     in_window = {
         item["client_order_id"]
         for item in attempts
@@ -657,6 +663,8 @@ def main(argv=None):
             receiver.stopping = True  # Expected close after all measured/drain phases.
             observations = snapshot(stop=True)
             receiver.close()
+            if receiver.error:
+                raise ValueError(f"fill observation failed: {receiver.error}; no continuous result")
             orders, fills = asyncio.run(
                 committed_orders(
                     args.dsn,
@@ -690,6 +698,8 @@ def main(argv=None):
                 },
                 "policy": {**ready["policy"], "quantity": args.quantity},
                 "metric_scrape_failures": sampler.failures,
+                "metrics_before": metric_ranges(sampler.samples[:1], host["clock"]["verified"]),
+                "metrics_after": metric_ranges(sampler.samples[-1:], host["clock"]["verified"]),
                 "phases": reports,
                 "notes": [
                     "One account; concurrent connections, not multi-tenancy.",

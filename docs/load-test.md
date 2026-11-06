@@ -100,6 +100,14 @@ counter ranges are not themselves event deltas when multiple label series are in
 ledger samples and the refusal breakdown accompany them. Scrape failures are counted. Absolute
 feed lag stays unavailable when clock synchronization cannot be verified.
 
+The first run also found an existing gate limitation: the ten-minute excess-lag baseline remained
+unestablished. The engine trims samples to at most ten minutes but requires their span to reach
+ten minutes, normally requiring an exact endpoint match. A separate synthetic reproduction over
+33.6 minutes retained a 599.94-second span and never established the baseline. The measured runs
+therefore exercise book/catch-up, receive-age and absolute-lag safeguards, **not** a mature
+rolling-median excess-lag safeguard. This report records the defect; the load-test change does
+not alter the trading path or shorten its accepted baseline threshold.
+
 The hypothesis from ADR 0017 is about **50 serialized operations/s** at roughly 20 ms/operation,
 not 50 accepted-and-filled orders/s: each order performs multiple durable operations. Compare the
 measured operation cost, refusal mix and load curve before calling a knee. x86 laptop results do
