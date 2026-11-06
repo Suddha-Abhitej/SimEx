@@ -19,6 +19,8 @@ rejections on effect, and the share of print quantity no shrink explains. Counts
 points only; no prices (ADR 0010).
 
 Usage:
+    python tools/fill_replay_check.py
+    python tools/fill_replay_check.py --last-hours 24 --json data/fill-accuracy/latest.json
     python tools/fill_replay_check.py --start 2026-10-16T12:00 --hours 1
     python tools/fill_replay_check.py --root data/recordings --start ... --hours 28
     python tools/fill_replay_check.py --start ... --hours 1 --blackout 15
@@ -27,11 +29,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import json
+import os
 import sys
+import tempfile
 from collections import Counter, defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from simex.exchange import (
     DEFAULT_INSTRUMENTS,
@@ -46,7 +53,7 @@ from simex.exchange import (
 from simex.exchange.accounts import SYSTEM_ACCOUNTS
 from simex.exchange.engine import BookCross
 from simex.marketdata import BookUpdate, Trade, TradeDeduper, decode
-from simex.recorder.replay import read
+from simex.recorder.replay import files, read
 
 SECOND = 1_000_000_000
 DELAY_NS = 200_000_000
@@ -252,7 +259,7 @@ class Run:
         total = sum(maker.values())
         return maker, (maker["book_cross"] / total if total else 0.0)
 
-    def report(self, product: str) -> list[str]:
+    def report(self, product: str, summary: dict | None = None) -> list[str]:
         engine = self.gate.engines[product]
         c, q = engine.stats.counts, engine.matcher.quantities
         probes = [
@@ -270,6 +277,8 @@ class Run:
                 and self.first_maker_fill[o.order_id] - o.effective_at_ns <= seconds * SECOND
             )
             rates.append(f"{seconds} s {n / len(rested) if rested else 0:.1%}")
+            if summary is not None:
+                summary.setdefault("filled_within_seconds", {})[str(seconds)] = n
         maker, cross_share = self.maker_mix(product)
         unexplained = q["print_unmatched"] / q["print"] if q["print"] else Decimal(0)
         rejected = sum(v for k, v in c.items() if k.startswith("rejected_on_effect:"))
@@ -285,6 +294,28 @@ class Run:
             )
             or "0s"
         )
+        if summary is not None:
+            # Aggregate whitelist only: internal orders/markout keys contain private prices.
+            summary.update(
+                passive_probes=len(probes),
+                rested_probes=len(rested),
+                taker_on_arrival=len(probes) - len(rested),
+                maker_fills=maker,
+                crosses_marked=c["crosses_marked"],
+                market_orders=c["market_orders"],
+                band_binds=c["band_binds"],
+                rejected_on_effect=rejected,
+                prints_before_first_snapshot=c["prints_before_first_snapshot"],
+                prints_during_resyncs=c["prints_ignored_unsynced"],
+                prints_stale=c["prints_ignored_stale"],
+                depletion_expired=expired,
+                gate_closed_seconds={
+                    reason: Decimal(duration) / SECOND
+                    for (pair, reason), duration in self.closed_seconds.items()
+                    if pair == product
+                },
+                unexplained_print_percentage=unexplained * 100,
+            )
         return [
             f"  {self.name:>19}: passive filled as maker within {', '.join(rates)}"
             f" (of {len(rested)}; {len(probes) - len(rested)} crossed as taker on arrival)",
@@ -300,7 +331,9 @@ class Run:
         ]
 
 
-def compare_markouts(run: Run, real: Markouts, product: str) -> tuple[list[str], list[str]]:
+def compare_markouts(
+    run: Run, real: Markouts, product: str, summary: dict | None = None
+) -> tuple[list[str], list[str]]:
     """The run's maker fills against real prints' makers at the same side and price."""
     lines, problems = [], []
     for h in MARKOUT_S:
@@ -314,17 +347,29 @@ def compare_markouts(run: Run, real: Markouts, product: str) -> tuple[list[str],
                 continue
             real_mean = sum(reference) / len(reference)
             diffs += [v - real_mean for v in values]
+        if summary is not None:
+            summary[str(h)] = {
+                "matched_fills": len(diffs),
+                "unmatched_fills": unmatched,
+                "mean_difference_bps": None,
+                "status": "no_matched_fills",
+            }
         if not diffs:
             lines.append(f"{h} s: no matched fills ({unmatched} unmatched)")
             continue
         mean = sum(diffs) / len(diffs)
         verdict = ""
+        status = "pass"
         if len(diffs) < MIN_MATCHED:
             verdict = " (too few to judge)"
+            status = "too_few_to_judge"
         elif mean > MARKOUT_LIMIT_BPS:
             verdict = " <- better than real"
+            status = "fail"
             problems.append(f"{run.name} {product}: maker markout at {h} s {mean:+.2f} bp vs real")
         lines.append(f"{h} s {mean:+.2f} bp over {len(diffs)} ({unmatched} unmatched){verdict}")
+        if summary is not None:
+            summary[str(h)].update(mean_difference_bps=mean, status=status)
     return lines, problems
 
 
@@ -333,11 +378,127 @@ def parse_time(text: str) -> datetime:
     return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
 
 
-def main() -> int:
+class ReportError(ValueError):
+    """An unavailable window or unwritable report, without a misleading partial result."""
+
+
+def positive_hours(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a positive integer") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
+def discover_window(
+    root: str | Path, hours: int = 1, *, now: datetime | None = None
+) -> tuple[datetime, datetime]:
+    cutoff = (now or datetime.now(UTC)).astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+    available = {
+        part.hour
+        for part in files(root, venue="gemini", products=DEFAULT_INSTRUMENTS, channels=["level2"])
+        # Clean shutdown publishes open parts too; published does not mean the hour has ended.
+        if part.hour < cutoff and part.product in DEFAULT_INSTRUMENTS
+    }
+    if not available:
+        raise ReportError(
+            "No complete published Gemini level2 hour is available under --root. "
+            "Was the recorder running? Wait for a complete hour to be published."
+        )
+    end = max(available) + timedelta(hours=1)
+    start = end - timedelta(hours=hours)
+    missing = [
+        start + timedelta(hours=i)
+        for i in range(hours)
+        if start + timedelta(hours=i) not in available
+    ]
+    if missing:
+        raise ReportError(
+            f"Cannot select {hours} consecutive complete hours: missing published level2 hours "
+            + ", ".join(hour.isoformat() for hour in missing)
+            + ". Check --root, wait for publication, or select an explicit "
+            "--start / --hours window."
+        )
+    return start, end
+
+
+def measurement_policy(runs: list[Run], blackout: float) -> dict:
+    """Record the effective objects used in this experiment, not guessed environment defaults."""
+    default = runs[0]
+    first_engine = next(iter(default.gate.engines.values()))
+    return {
+        "default_cancel_attribution": first_engine.settings.cancel_attribution.value,
+        "default_book_cross": first_engine.settings.book_cross.value,
+        "markout_horizons_seconds": list(MARKOUT_S),
+        "min_matched": MIN_MATCHED,
+        "markout_limit_bps": MARKOUT_LIMIT_BPS,
+        "fill_within_seconds": list(FILL_WITHIN_S),
+        "probe_interval_ns": default.every_ns,
+        "probe_lifetime_ns": default.lifetime_ns,
+        "blackout_seconds": Decimal(str(blackout)),
+        "runs": {
+            run.name: {
+                "maker_fee_bps": run.writer.fees.maker_bps,
+                "taker_fee_bps": run.writer.fees.taker_bps,
+                "fee_increment": run.writer.fees.fee_increment,
+                "order_delay_ns": run.writer.delay_ns,
+                "pairs": {
+                    product: {
+                        "market_band_bps": engine.instrument.market_band_bps,
+                        "cancel_attribution": engine.settings.cancel_attribution.value,
+                        "book_cross": engine.settings.book_cross.value,
+                        "match_window_ns": engine.settings.window_ns(product),
+                        "depletion_max_age_ns": engine.settings.depletion_max_age_ns,
+                        "lag_baseline_minutes": Decimal(str(engine.settings.lag_baseline_minutes)),
+                    }
+                    for product, engine in run.gate.engines.items()
+                },
+            }
+            for run in runs
+        },
+    }
+
+
+def write_summary(path: Path, summary: dict) -> None:
+    def encode(value):
+        if isinstance(value, Decimal):
+            return str(value)
+        raise TypeError(f"Unsupported summary value: {type(value).__name__}")
+
+    content = json.dumps(summary, default=encode, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    tmp = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as handle:
+            tmp = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except OSError as exc:
+        raise ReportError(f"Cannot write JSON summary to {path}: {exc}") from None
+    finally:
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+
+
+def _main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--root", default="data/recordings")
-    parser.add_argument("--start", required=True, help="window start, ISO time (UTC by default)")
-    parser.add_argument("--hours", type=float, default=1.0)
+    window = parser.add_mutually_exclusive_group()
+    window.add_argument("--start", help="window start, ISO time (UTC by default)")
+    window.add_argument(
+        "--last-hours", type=positive_hours, help="most recent consecutive complete hours"
+    )
+    parser.add_argument(
+        "--hours", type=float, help="explicit window length (default with --start: 1)"
+    )
+    parser.add_argument("--json", type=Path, help="write an additional aggregate JSON summary")
     parser.add_argument("--every", type=float, default=60.0, help="seconds between probes")
     parser.add_argument("--lifetime", type=float, default=300.0, help="passive probe life, s")
     parser.add_argument(
@@ -346,9 +507,17 @@ def main() -> int:
         default=0.0,
         help="skip md.level2 for this many seconds from the window start",
     )
-    args = parser.parse_args()
-    start = parse_time(args.start)
-    end = start + timedelta(hours=args.hours)
+    args = parser.parse_args(argv)
+    if args.hours is not None and args.start is None:
+        parser.error("--hours requires --start; use --last-hours for discovery")
+    if args.start is None:
+        start, end = discover_window(args.root, args.last_hours or 1)
+    else:
+        try:
+            start = parse_time(args.start)
+        except ValueError:
+            raise ReportError("Invalid --start: use an ISO date/time (UTC by default).") from None
+        end = start + timedelta(hours=args.hours if args.hours is not None else 1.0)
     products = sorted(DEFAULT_INSTRUMENTS)
     every, lifetime = int(args.every * SECOND), int(args.lifetime * SECOND)
     runs = [Run(mode, cross, products, every, lifetime) for mode, cross in RUNS]
@@ -393,22 +562,68 @@ def main() -> int:
         return 1
     end_ns = int(end.timestamp() * SECOND)
     problems = []
+    summaries = {}
     for run in runs:
         run.finish(end_ns)
-        problems += run.money_problems()
+        money_problems = run.money_problems()
+        problems += money_problems
+        summaries[run.name] = {
+            "money_problems": money_problems,
+            "markouts_affect_verdict": run is runs[0],
+            "pairs": {},
+        }
     print(f"{start:%Y-%m-%d %H:%M} .. {end:%Y-%m-%d %H:%M} UTC, {records} records")
     default = runs[0]
+    judgeable = False
     for product in products:
         print(product)
         for run in runs:
-            print("\n".join(run.report(product)))
+            counts = {} if args.json else None
+            print("\n".join(run.report(product, counts)))
+            summaries[run.name]["pairs"][product] = {"counts": counts}
         if default.maker_mix(product)[1] > 0.5:
             problems.append(f"{default.name} {product}: book_cross over half of maker fills")
-        lines, markout_problems = compare_markouts(default, real, product)
+        markouts = {}
+        lines, markout_problems = compare_markouts(default, real, product, markouts)
+        summaries[default.name]["pairs"][product]["maker_markouts"] = markouts
+        judgeable |= any(item["status"] in {"pass", "fail"} for item in markouts.values())
         problems += markout_problems
         print(f"  maker markouts vs real prints ({default.name}): " + "; ".join(lines))
+        if args.json:
+            for run in runs[1:]:
+                diagnostic = {}
+                compare_markouts(run, real, product, diagnostic)
+                summaries[run.name]["pairs"][product]["maker_markouts"] = diagnostic
+    if not judgeable:
+        print(
+            "Window too short to judge: every pair has fewer than MIN_MATCHED "
+            f"({MIN_MATCHED}) matched fills at every horizon. "
+            "Try a longer --last-hours (24 or more)."
+        )
     print("FAIL:\n  " + "\n  ".join(problems) if problems else "PASS")
+    if args.json:
+        write_summary(
+            args.json,
+            {
+                "schema_version": 1,
+                "window": {"start": start.isoformat(), "end": end.isoformat()},
+                "record_count": records,
+                "policy": measurement_policy(runs, args.blackout),
+                "runs": summaries,
+                "verdict": "FAIL" if problems else "PASS",
+                "problems": problems,
+                "insufficient_samples": not judgeable,
+            },
+        )
     return 1 if problems else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except (ReportError, OSError, RuntimeError) as exc:
+        print(f"fill replay check: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
