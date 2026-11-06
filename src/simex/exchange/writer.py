@@ -234,7 +234,11 @@ class AccountWriter:
                 )
             self.orders[order.order_id] = order
             self.by_key[(account_id, order.request.client_order_id)] = order.order_id
-            if row["market_band_price"] is not None:
+            if (
+                order.request.type is OrderType.MARKET
+                and not order.status.terminal
+                and row["market_band_price"] is not None
+            ):
                 self.band_prices[order.order_id] = Decimal(row["market_band_price"])
 
     def deposit(self, account_id: str, asset: str, amount: Decimal, event_key: str) -> None:
@@ -483,8 +487,9 @@ class AccountWriter:
 
     def _close(self, order: Order) -> None:
         self.accounts.release(order.order_id)
-        self.band_prices.pop(order.order_id, None)
+        # Keep the bound in the terminal audit snapshot before discarding runtime state.
         self._persist_order(order)
+        self.band_prices.pop(order.order_id, None)
 
     # Queries -----------------------------------------------------------------------------------
 
