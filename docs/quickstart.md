@@ -201,6 +201,40 @@ nothing. Explicitly apply recovered fills, adopt a new portfolio baseline, or re
 against the ledger. A fresh live subscription is a **new baseline**, not continuous history.
 Fills can occur between reads and a new subscription: this is not an atomic snapshot/stream handoff.
 
+## Score your bot
+
+Start the recorder with the same environment **before** running the bot, in its own terminal:
+
+```bash
+python -m simex.recorder
+```
+
+After trading, score the committed fill history against private Gemini marks:
+
+```bash
+python -m simex.evaluator
+python -m simex.evaluator --account owner --account dca --lookback-seconds 7200
+```
+
+The DSN comes from `EXCHANGE_LEDGER_DSN` (or explicit `--dsn`); recordings default to
+`data/recordings`. Use actual account IDs that have fills: the second command assumes a DCA baseline
+was configured and traded. By default every non-system account with fills is reported; each is
+compared only with the other selected accounts. One selected account prints metrics without a
+comparison. Starting balances come from recorded seed postings, not an assumed deposit.
+
+The recorder publishes completed hours, so the current partial hour may not yet be on disk.
+The CLI prints progress before replay, which can take minutes, and reports mark/fill coverage.
+`--lookback-seconds` warms up the book **before** the evaluation window; it does not shorten the fill
+history. If recordings lag by more than one evaluation period, the end is clamped with a notice
+naming the limiting product. Use `--account` to exclude accounts exposed to that product, or wait
+for more recordings. A first-mark warning suggests a longer look-back to find an earlier snapshot.
+Missing recordings cannot be reconstructed by increasing the look-back.
+
+Reports print to stdout only and contain private Gemini-derived results; do not publish or upload
+them. [ADR 0020](adr/0020-evaluator-price-series-and-significance.md) defines the unchanged marks and
+statistics: one session ranks agents by exposure, not skill, and Sharpe cannot distinguish accounts
+merely scaling exposure to the same product.
+
 ## Find out whether your bot helps
 
 Use the [baseline agents (ADR 0019)](adr/0019-baseline-agents.md) and
