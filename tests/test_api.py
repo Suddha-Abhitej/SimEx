@@ -200,12 +200,12 @@ def test_read_refusals_keep_exact_reasons(path, reason, status):
         ({"quantity": "1.1"}, "quantity_limit"),
         ({"quantity": 0.1}, "bad_decimal_or_product"),
         ({"limit_price": 100}, "bad_decimal_or_product"),
-        ({"quantity": "NaN"}, "bad_order"),
-        ({"side": "wrong"}, "bad_order"),
-        ({"product_id": "UNKNOWN"}, "bad_order"),
-        ({"quantity": "0.000000001"}, "bad_order"),
+        ({"quantity": "NaN"}, "bad_decimal"),
+        ({"side": "wrong"}, "bad_field"),
+        ({"product_id": "UNKNOWN"}, "unknown_product"),
+        ({"quantity": "0.000000001"}, "bad_quantity"),
         ({"reasoning": ""}, "reasoning_required"),
-        ({"reasoning": "x" * 8193}, "bad_order"),
+        ({"reasoning": "x" * 8193}, "bad_reasoning"),
     ],
 )
 def test_bad_order_refusal_is_identical_over_rest_and_mcp(patch, reason):
@@ -222,7 +222,7 @@ def test_bad_order_refusal_is_identical_over_rest_and_mcp(patch, reason):
             headers=HEADERS,
         ) as client:
             response = await client.post("/v1/orders", json=payload)
-        assert response.status_code == 400
+        assert response.status_code == (404 if reason == "unknown_product" else 400)
         assert response.json()["reason"] == reason
         assert expected["reason"] == reason
         assert response.json() == expected

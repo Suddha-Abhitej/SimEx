@@ -124,7 +124,9 @@ class ExchangeTools:
             return {"ok": False, "reason": "bad_decimal_or_product"}
         try:
             order_request = OrderRequest.parse(payload)
-            instrument = self.writer.instruments[order_request.product_id]
+            instrument = self.writer.instruments.get(order_request.product_id)
+            if instrument is None:
+                raise OrderError("unknown_product", "Select a configured product_id")
             order_request.check(instrument)
             quantity = order_request.quantity
             price = order_request.limit_price
@@ -142,7 +144,9 @@ class ExchangeTools:
                     if best is None:
                         return {"ok": False, "reason": "no_band_price"}
                     price = band_price(best, order_request.side, instrument)
-        except (KeyError, TypeError, ValueError, OrderError):
+        except OrderError as exc:
+            return {"ok": False, "reason": exc.reason, "detail": exc.detail}
+        except (KeyError, TypeError, ValueError):
             return {"ok": False, "reason": "bad_order"}
         if not quantity.is_finite() or (price is not None and not price.is_finite()):
             return {"ok": False, "reason": "bad_decimal"}
@@ -156,8 +160,10 @@ class ExchangeTools:
             order = self.writer.submit(self.account_id, payload, self.clock_ns())
         except LedgerHalted:
             return {"ok": False, "reason": "ledger_halted"}
-        except (OrderError, ValueError) as exc:
-            return {"ok": False, "reason": getattr(exc, "reason", "invalid_order")}
+        except OrderError as exc:
+            return {"ok": False, "reason": exc.reason, "detail": exc.detail}
+        except ValueError:
+            return {"ok": False, "reason": "invalid_order"}
         if order.status is OrderStatus.REJECTED:
             return {
                 "ok": False,

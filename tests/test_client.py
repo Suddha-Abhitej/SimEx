@@ -289,7 +289,7 @@ def test_invalid_order_policy_is_left_to_the_real_server():
     with serving() as api, Client(api.url, TOKEN) as client:
         with pytest.raises(APIError) as caught:
             place(client, quantity="0.000000001")  # Off-grid; transport still sends it unchanged.
-        assert caught.value.reason == "bad_order"
+        assert caught.value.reason == "bad_quantity"
         assert json.loads(api.probe.requests[0][2])["quantity"] == "0.000000001"
 
 
