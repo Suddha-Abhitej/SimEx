@@ -101,6 +101,42 @@ For a resting-limit variant use `type="limit"` with a Decimal/string `limit_pric
 grid well below the current mid for a buy. It may wait indefinitely or never fill; book movement
 alone does not invent maker fills ([ADR 0014](adr/0014-order-model-and-fill-model.md)).
 
+## Replace the decision with your model
+
+Run the [bot template](../examples/llm_bot.py) with the same exchange token/port environment:
+
+```bash
+python examples/llm_bot.py
+# Optional: one enabled product and minimum seconds between decision ticks.
+BOT_PRODUCT=BTC-USD BOT_INTERVAL_SECONDS=60 python examples/llm_bot.py
+```
+
+**No model key or new dependency is needed.** Replace `decide(state)` to connect your own model;
+the comment above it sketches the seam without making a model call. State contains quote,
+features, your portfolio/open orders, recent fills, session refusals and counters. These are
+separate reads, not an atomic snapshot. Return an intent with `product_id`, `side`, `type`,
+Decimal/string `quantity`, optional `limit_price` and your model's own `reasoning`, or `None`.
+The rationale is submitted verbatim and persisted: it is the record to read when a run goes badly.
+Untrusted output is checked before HTTP; an integer `quantity: 500` or a float is a local skip.
+
+The untuned placeholder demonstrates one accepted tiny market buy per session when a two-sided
+quote exists and the product has no open orders. It starts at BTC's `0.00001`; other products may
+need a different quantity chosen in `decide`. A refusal does not retire it; restarting can buy
+again. Refusals print their reason and details and enter the next decision's state. One grid
+correction rounds **down** and uses a fresh key; zero or a reported minimum violation skips.
+`below_min_size` never raises the quantity automatically, and a second refusal ends the retry
+path. Let `decide` make a different decision on a later tick using that feedback.
+
+The default interval is 60 seconds. The synchronous loop drains fills/heartbeats instead of
+sleeping: a quiet tick can be up to one heartbeat late (default 15 seconds), and slow work can
+delay it further. Short cadences can turn a modest rule into an aggressive one. Halts stop the
+bot; a stream gap propagates for explicit reconciliation rather than restarting silently. Ctrl-C
+and disconnects print a summary. Submitted counts are logical SDK calls, including refused and
+corrected attempts; skips include no intent, invalid output, failed reads and abandoned refusals.
+Fill quantity/fees count only the configured product's live-observed fills, not historical fills
+or complete ledger totals. Accepted orders can fill after exit. Keep this output private and use
+`python -m simex.evaluator` for P&L and evaluation, as described below.
+
 ## HTTP client
 
 ```python
