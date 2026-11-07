@@ -3,8 +3,8 @@
 **A personal, live practice market for testing whether an AI can really trade.**
 Live exchange prices, simulated money, honest fills.
 
-> **Status: week 1, live data in.** Nothing trades yet. The plan, architecture and decisions are in
-> [`docs/`](docs/); the build follows the roadmap below.
+> **Status:** the private API, Python SDK and local load test are available. Oracle ARM64
+> capacity remains unmeasured. The plan and decisions are in [`docs/`](docs/).
 >
 > **Scope:** SimEx is a personal research tool. The code is open source; it runs as a private
 > instance for its owner and does not publish market data, recordings or leaderboards, because
@@ -368,6 +368,109 @@ Or open the repo in a GitHub Codespace; the dev container installs everything.
 The optional [private REST API and fills stream](docs/private-api.md) shares the running exchange's
 account writer and trading operations with MCP. It binds only to localhost and requires a bearer
 secret and the ledger; set `EXCHANGE_API_PORT` to enable it.
+
+## Measured system metrics
+
+These are **Linux devcontainer measurements on an x86 laptop, not Oracle ARM64 capacity**.
+Run the [isolated SDK load driver](docs/load-test.md) against a fresh `simex_load_*` database;
+it launches its own private runtime and never uses the trading ledger. Concurrent clients are
+connections to one account. Results contain system aggregates only (ADR 0010).
+
+**Conditions for the sweep below:** 2026-11-06 UTC, driver commit
+[`66d6c05`](https://github.com/Suddha-Abhitej/SimEx/commit/66d6c05b5b1699e51054257d45586900b5a1f0c5),
+Python 3.12.11, WSL2 Linux 6.6.87.2 devcontainer, AMD Ryzen 9 8945HS (8 cores/16 logical CPUs
+exposed), 7,743,676 KiB visible guest RAM (about 7.38 GiB), with no dedicated CPU reservation verified.
+Kafka 3.9.1 and Postgres 16.10 run in local Docker; Postgres retains the Compose 1 GiB cap and
+its Docker-volume storage. Fresh database/account per run; history accumulates across phases.
+The normal Gemini ingestor shares the Linux clock; pytest was stopped during measurement.
+
+Workload: BTC minimum-size market buys, 3-second warm-up then 15-second measured windows, with
+3-second drains after each. The seed is deposited once; no top-ups or resizing. Configured
+limits: quantity `0.001`, notional `1000`, absolute position `1`; order quantity `0.00001`.
+Accepted defaults remain 60/120 bps maker/taker fees, 50 bps market band, 200 ms order delay,
+250 ms hold-back, proportional cancels and print-only maker fills. SDK construction is outside
+the window; initial HTTP connections are included. All 6,251 measured-cohort fills were observed
+by the SDK and confirmed in SQL, with zero retries, transport-uncertain outcomes or scrape failures.
+
+Rates count completions **inside** each window and are confirmed against the ledger after the
+runtime stops; later drain fills are excluded from rates. Busy slots were not sent and are
+separate from refusals. Final cohort fill counts/latencies include drain completions.
+
+| Offered/s | Client cap | Sent | Durable accepted/s | Committed-fill orders/s | Busy slots | Refusals | Request p99 ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 1 | 149 | 9.93 | 9.67 | 1 | 0 | 48.13 |
+| 25 | 1 | 188 | 12.53 | 12.13 | 187 | 0 | 65.62 |
+| 50 | 1 | 246 | 16.40 | 15.93 | 504 | 0 | 64.02 |
+| 75 | 1 | 266 | 17.67 | 17.20 | 859 | 0 | 65.91 |
+| 100 | 1 | 260 | 17.27 | 16.73 | 1240 | 0 | 70.31 |
+| 10 | 4 | 150 | 10.00 | 9.73 | 0 | 0 | 20.64 |
+| 25 | 4 | 375 | 25.00 | 24.20 | 0 | 0 | 79.07 |
+| 50 | 4 | 700 | 46.47 | 45.07 | 50 | 0 | 99.41 |
+| 75 | 4 | 686 | 45.47 | 44.20 | 439 | 0 | 181.76 |
+| 100 | 4 | 668 | 44.27 | 42.93 | 832 | 0 | 192.97 |
+| 10 | 8 | 150 | 10.00 | 9.73 | 0 | 0 | 17.75 |
+| 25 | 8 | 375 | 25.00 | 24.20 | 0 | 0 | 78.65 |
+| 50 | 8 | 695 | 45.93 | 44.27 | 55 | 0 | 235.28 |
+| 75 | 8 | 678 | 44.67 | 43.27 | 447 | 0 | 333.22 |
+| 100 | 8 | 664 | 43.80 | 42.47 | 836 | 0 | 362.31 |
+
+The one-connection plateau is client-limited. Four/eight connections show the operating curve
+bending around 50 offered/s and plateauing around 44–46 durable accepted/s; extra offered load
+increases queueing and busy slots. The roughly 50 **operations**/s hypothesis from a historical
+20 ms ledger operation does not predict this Linux run: the 50/s, four-client point completed
+136.8 ledger operations/s, averaging 4.28 ms per writer acknowledgement, with roughly three
+durable operations per filled order. SQL identity checks establish that this was persisted work.
+These finite, shared-host observations are not a production capacity guarantee. Client cap is
+the configured maximum concurrent SDK workers, each with its own connection, rather than a
+claim that every connection was busy at low offered rates.
+
+**Knee refinement:** same date/host/policy, another fresh database, driver commit
+[`21fcc35`](https://github.com/Suddha-Abhitej/SimEx/commit/21fcc35fff367129783ad383a9f35a91a085c30f),
+20-second windows with the same warm-up/drains and no second maker observation. All 7,516 fills
+were confirmed in SQL and observed by the SDK (one order produced two fills); no refusals,
+retries, uncertain responses or scrape failures occurred. More connections did not raise the
+observed plateau: the tested operating knee lies around 45–55 offered/s, yielding roughly
+44–47 durable accepted/s under these conditions.
+
+| Offered/s | Client cap | Sent | Durable accepted/s | Committed-fill orders/s | Busy slots | Refusals | Request p99 ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 35 | 4 | 698 | 34.90 | 34.05 | 2 | 0 | 74.15 |
+| 45 | 4 | 884 | 44.15 | 43.10 | 16 | 0 | 137.93 |
+| 55 | 4 | 945 | 47.10 | 46.10 | 155 | 0 | 100.58 |
+| 35 | 8 | 700 | 34.95 | 34.05 | 0 | 0 | 98.18 |
+| 45 | 8 | 894 | 44.65 | 43.50 | 6 | 0 | 193.13 |
+| 55 | 8 | 925 | 45.85 | 44.85 | 175 | 0 | 238.34 |
+| 35 | 16 | 700 | 35.00 | 34.15 | 0 | 0 | 123.75 |
+| 45 | 16 | 888 | 43.80 | 42.80 | 12 | 0 | 398.42 |
+| 55 | 16 | 881 | 43.50 | 42.35 | 219 | 0 | 590.59 |
+
+The refinement's sampled watermark lag was 0.267 s before load, peaked at 0.445 s during load
+(176 in-window scrapes), and was 0.271 s after draining. Three late records were counted by
+the end of the run: the ordering margin was lost for those records (ADR 0015), rather than
+records being dropped. Reconciliation completions rose from one to five; ledger halts stayed
+zero. Absolute venue feed lag remains unavailable because host synchronization was unverified.
+
+| Latency / health measure | Count | Median ms | Sample p99 ms | Conditions |
+| --- | ---: | ---: | ---: | --- |
+| Taker submit → committed fill | 700 | 496.217 | 519.015 | 50 offered/s, 4 clients, sweep revision above |
+| SDK request start → fill observation | 700 | 522.955 | 571.894 | Same cohort; includes transport/scheduling |
+| Ledger commit path | 676 | 6.969 | 9.000 | Calls completing inside that window; cumulative from transaction start |
+| Causal tick → committed maker fill | 1 | 287.090 | 287.090 | Separate 60-second passive observation; one sample establishes no tail |
+| Absolute feed lag during load | — | unavailable | unavailable | Host synchronization could not be verified; no absolute lag claim |
+
+Latency uses exact samples and nearest-rank p99, not histogram interpolation. Nominal wall,
+monotonic and performance-clock resolution was 1 ns; the smallest observed positive performance
+clock read step was 80 ns. Resolution does not establish clock accuracy. Watermark lag at the
+50/s, four-client point ranged 0.250–0.276 s in 15 scrapes. The maker sample measures its causal
+feed record, not its resting wait; taker samples are never relabelled as tick-to-fill latency.
+
+**Safety coverage limitation:** no exchange refusals were observed; the feed gate stayed open
+in measured samples and ledger halts stayed zero. However, the rolling-median excess-lag baseline
+remained disabled, an existing defect independently reproduced and tracked in
+[#113](https://github.com/Suddha-Abhitej/SimEx/issues/113). Book/catch-up, receive-age and absolute-lag
+checks remained configured; these results do not validate the mature excess-lag safeguard.
+Absolute feed lag stays unavailable under [#74](https://github.com/Suddha-Abhitej/SimEx/issues/74).
+The [measurement guide](docs/load-test.md) gives reproduction commands and interpretation limits.
 
 ## Decisions
 
