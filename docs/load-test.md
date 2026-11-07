@@ -105,7 +105,8 @@ unestablished. The engine trims samples to at most ten minutes but requires thei
 ten minutes, normally requiring an exact endpoint match. A separate synthetic reproduction over
 33.6 minutes retained a 599.94-second span and never established the baseline. The measured runs
 therefore exercise book/catch-up, receive-age and absolute-lag safeguards, **not** a mature
-rolling-median excess-lag safeguard. This report records the defect; the load-test change does
+rolling-median excess-lag safeguard ([#113](https://github.com/Suddha-Abhitej/SimEx/issues/113)).
+This report records the defect; the load-test change does
 not alter the trading path or shorten its accepted baseline threshold.
 
 The hypothesis from ADR 0017 is about **50 serialized operations/s** at roughly 20 ms/operation,
