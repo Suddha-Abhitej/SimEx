@@ -24,8 +24,6 @@ from simex.exchange.runtime import LiveRuntimeGroup
 from simex.exchange.source import KafkaMarketSource
 from simex.ledger import LedgerMetrics
 
-SYSTEM = {"_market", "_external", "_fees"}
-
 
 def validate_destination(dsn, account):
     """Reject before connecting, including URL options that could override the database."""
@@ -68,17 +66,13 @@ async def check_empty_database(dsn, account):
             "AND a.attname='account_id' AND NOT a.attisdropped "
             "WHERE c.relkind IN ('r','p') "
             "AND (a.attname IS NOT NULL OR c.relname IN ('ledger_events','outbox')) "
-            "AND n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema'"
+            "AND left(n.nspname, 3) <> 'pg_' AND n.nspname <> 'information_schema'"
         )
         for schema, table, has_account in tables:
             quoted = ".".join('"' + part.replace('"', '""') + '"' for part in (schema, table))
-            if not has_account:
-                if await connection.fetchval(f"SELECT EXISTS(SELECT 1 FROM {quoted})"):
-                    raise ValueError("load database contains ledger history; use a fresh database")
-                continue
-            accounts = await connection.fetch(f"SELECT DISTINCT account_id FROM {quoted}")
-            if accounts:
-                raise ValueError("load database contains account history; use a fresh database")
+            if await connection.fetchval(f"SELECT EXISTS(SELECT 1 FROM {quoted})"):
+                kind = "account" if has_account else "ledger"
+                raise ValueError(f"load database contains {kind} history; use a fresh database")
     finally:
         await connection.close()
 

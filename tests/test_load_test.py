@@ -132,19 +132,21 @@ def test_only_explicit_fresh_load_accounts_are_allowed(account):
         runtime.validate_destination("postgresql://localhost/simex_load_safe", account)
 
 
-def test_existing_history_in_another_schema_is_refused_without_mutation(load_dsn):
+@pytest.mark.parametrize("schema", ["private", "pghistory"])
+def test_existing_history_in_another_schema_is_refused_without_mutation(load_dsn, schema):
     async def check():
         await runtime.check_empty_database(load_dsn, "load_test")
         connection = await asyncpg.connect(load_dsn)
         try:
             await connection.execute(
-                "CREATE SCHEMA private; CREATE TABLE private.history (account_id text)"
+                f'CREATE SCHEMA "{schema}"; CREATE TABLE "{schema}".history (account_id text)'
             )
-            await connection.execute("INSERT INTO private.history VALUES ('unrelated')")
+            await connection.execute(f"INSERT INTO \"{schema}\".history VALUES ('unrelated')")
             with pytest.raises(ValueError, match="account history"):
                 await runtime.check_empty_database(load_dsn, "load_test")
             assert (
-                await connection.fetchval("SELECT account_id FROM private.history") == "unrelated"
+                await connection.fetchval(f'SELECT account_id FROM "{schema}".history')
+                == "unrelated"
             )
             assert await connection.fetchval("SELECT to_regclass('public.orders')") is None
         finally:
