@@ -185,6 +185,12 @@ watermark lag, reconciliation and halts. Optional processes intentionally left o
 unavailable panels, not healthy zeroes. Absolute venue lag requires verified host clock
 synchronization; check `timedatectl status` on the host, not only inside a container
 ([#74](https://github.com/Suddha-Abhitej/SimEx/issues/74)).
+The ingestor logs one warning per sustained negative-lag episode and exports
+`simex_ingest_clock_skew_suspected{venue,product_id}`. A value of 1 means a fresh condition
+confirmed over 60 seconds with at least three observations; **0 is not evidence of clock
+synchronization**, including during warm-up or a feed outage. It detects rather than repairs
+clock disagreement; see [ADR 0025](adr/0025-ingestor-clock-skew-diagnostic.md) for episode and
+freshness semantics. Earlier unavailable absolute-lag measurements remain unavailable.
 After deploying #115, watch closures and the baseline-established gauge; see the
 [ADR 0016 amendment](adr/0016-stale-data-guard-and-fill-timing.md#amendment-excess-lag-baseline-coverage-2026-11-09-113).
 

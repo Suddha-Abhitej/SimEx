@@ -66,6 +66,13 @@ class IngestMetrics:
             "Feed lag of the latest message",
             ["channel"],
         )
+        self.clock_skew_suspected = venued(
+            Gauge,
+            "simex_ingest_clock_skew_suspected",
+            "1 for fresh, sustained negative level2 lag; "
+            "0 is not evidence of clock synchronization",
+            ["product_id"],
+        )
         self.gaps = venued(
             Counter,
             "simex_ingest_gaps",
