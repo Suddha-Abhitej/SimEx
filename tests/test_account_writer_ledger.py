@@ -57,6 +57,20 @@ class MemoryLedger:
             self.balances[(posting.account_id, posting.asset)] += posting.amount
         self.save_order(order, reservation, band_price)
 
+    def load_order(self, account_id, *, client_order_id=None, order_id=None):
+        return next(
+            (
+                row
+                for row in self.load_account(account_id).orders
+                if (
+                    row["order_id"] == order_id
+                    if order_id is not None
+                    else row["client_order_id"] == client_order_id
+                )
+            ),
+            None,
+        )
+
     def load_account(self, account_id):
         orders = []
         for order in self.orders.values():

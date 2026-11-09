@@ -153,7 +153,10 @@ def test_restored_and_terminal_replays_do_not_invent_admissions(status):
         writer.expire(order.order_id, T0 + DELAY)
     elif status == "rejected":
         writer.reject_on_effect(order.order_id, "book_not_synced", T0 + DELAY)
-    assert writer.submit("alice", payload, T0 + DELAY + 1) is order
+    replay = writer.submit("alice", payload, T0 + DELAY + 1)
+    assert replay == order
+    if not order.status.terminal:
+        assert replay is order
     restored = AccountWriter(
         DEFAULT_INSTRUMENTS,
         FeeSchedule(),
@@ -198,7 +201,7 @@ def test_failed_submits_keep_the_original_exception_without_admission(kind, reas
             raise failure
 
         if kind == "persist":
-            writer.ledger = SimpleNamespace(save_order=fail)
+            writer.ledger = SimpleNamespace(save_order=fail, load_order=lambda *a, **kw: None)
         else:
             writer.gate = SimpleNamespace(check=fail)
     with pytest.raises(Exception) as raised:
@@ -381,7 +384,7 @@ def test_broken_observer_and_logger_cannot_mask_original_ledger_error(monkeypatc
     def fail(*args):
         raise failure
 
-    writer.ledger = SimpleNamespace(save_order=fail)
+    writer.ledger = SimpleNamespace(save_order=fail, load_order=lambda *a, **kw: None)
     monkeypatch.setattr(observer, "observe", fail)
     monkeypatch.setattr("simex.exchange.order_metrics.log.warning", fail)
     with pytest.raises(LedgerHalted) as raised:

@@ -226,7 +226,7 @@ def trade(tools, side, price, *, quantity="1", ts_ns=10 * NS):
     order = tools.writer.submit(
         tools.account_id,
         {
-            "client_order_id": f"synthetic-{len(tools.writer.orders)}",
+            "client_order_id": f"synthetic-{tools.writer.event_sequence}",
             "product_id": "BTC-USD",
             "side": side,
             "type": "limit",

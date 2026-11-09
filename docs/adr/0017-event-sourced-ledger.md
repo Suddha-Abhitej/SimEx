@@ -1,6 +1,6 @@
 # 0017. Event-sourced ledger and durable fills
 
-- **Status:** Accepted (amended 2026-11-09: commit-budget measurement)
+- **Status:** Accepted (amended 2026-11-09: commit-budget measurement; amended by 0027: recovery scope)
 - **Date:** 2026-10-19
 - **Amends:** [0014](0014-order-model-and-fill-model.md) for the explicit `_external`
   counterparty.
@@ -48,8 +48,8 @@ propagate an API and scheduling change through every pair engine, runner, and te
 semantic benefit. `SyncLedger` therefore owns one asyncpg connection and one private event-loop
 thread. Calls are submitted with `run_coroutine_threadsafe` and are serialized by that single
 connection; this deliberately makes the ledger a per-account blocking mutation boundary rather
-than allowing concurrent writes to race the in-memory projection. Every call has a 500 ms hard
-timeout. On timeout, the loop-thread task is cancelled and the caller waits up to the
+than allowing concurrent writes to race the in-memory projection. Ordinary calls have a 500 ms hard
+timeout; account recovery uses the separate five-second startup budget in [0027](0027-live-order-recovery-and-durable-idempotency.md). On timeout, the loop-thread task is cancelled and the caller waits up to the
 `CANCELLATION_GRACE_SECONDS` grace period for it to settle; an unsettled operation makes the
 connection unusable and raises `LedgerHalted` immediately without retrying. A settled timeout is
 retried with backoff for fills because fill identity makes the write idempotent. Non-timeout
@@ -177,3 +177,11 @@ with its hardware, workload, date, revisions and sample-resolution conditions. E
 and the alert's interpolated histogram quantile are different measurements; this is not a claim
 that they are equal or a universal capacity guarantee. **No Oracle ARM64 measurement exists.**
 The ledger implementation, commit budget and alert rule are unchanged.
+
+## Amendment: bounded order recovery (2026-11-09, #107)
+
+[ADR 0027](0027-live-order-recovery-and-durable-idempotency.md) replaces eager lifetime-order
+recovery with live-order recovery and authoritative historical point lookups, and defines the
+separate five-second per-account restore budget. The posting fold remains history-dependent.
+Idempotency, audit retention, matching, fill/settlement semantics and ordinary call timeouts stay
+unchanged.

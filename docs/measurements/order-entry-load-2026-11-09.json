@@ -1,0 +1,25 @@
+{
+  "status": "unavailable",
+  "reason": "No fresh book from Kafka within the 20-second readiness window",
+  "exception_type": "ValueError",
+  "host": {
+    "date_utc": "2026-11-09T19:30:38.452739+00:00",
+    "commit": "1fbce61a9834f71adcc0ee2e2fc284ae1cd16e2d",
+    "os": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+    "architecture": "x86_64",
+    "environment": "Linux devcontainer",
+    "cpu": "AMD Ryzen 9 8945HS w/ Radeon 780M Graphics",
+    "logical_cpus": 16,
+    "visible_memory_kib": 7743676,
+    "python": "3.12.11",
+    "clock": {
+      "verified": false,
+      "source": "host clock synchronisation could not be verified"
+    },
+    "perf_counter_resolution_ns": 1.0,
+    "monotonic_resolution_ns": 1.0,
+    "wall_clock_resolution_ns": 1.0,
+    "minimum_observed_perf_counter_step_ns": 80,
+    "windows_latency_unreliable": false
+  }
+}

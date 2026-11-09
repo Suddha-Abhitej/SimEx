@@ -1,6 +1,7 @@
 """The account writer: accepts orders and cancels, holds funds, settles fills (ADR 0014).
 
-It owns every order record and every balance; one task drives it, so nothing here locks. The
+It owns live orders and every balance; durable terminal history stays in the ledger (ADR 0027).
+Without a ledger it retains historical orders for idempotency. One task drives order state. The
 pair engines (#8) own matching and the book, and report back through `record_fill`, `activate`,
 `cancel_now`, `expire` and `reject_on_effect`. Every change is appended to `events` with a
 sequence number in a bounded notification buffer. Fill notifications follow ledger commit;
@@ -23,6 +24,7 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Mapping
+from contextlib import contextmanager
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Protocol
 
@@ -77,6 +79,8 @@ class AccountLedger(Protocol):
     ) -> None: ...
 
     def load_account(self, account_id: str): ...
+
+    def load_order(self, account_id: str, *, client_order_id=None, order_id=None): ...
 
 
 def band_price(best: Decimal, side: Side, instrument: Instrument) -> Decimal:
@@ -146,6 +150,7 @@ class AccountWriter:
         self.applied_sequences: dict[str, int] = {}
         self.orders: dict[str, Order] = {}
         self.by_key: dict[tuple[str, str], str] = {}
+        self._submission_resolution: tuple[str, str, Order | None] | None = None
         self.band_prices: dict[str, Decimal] = {}  # market order -> the band edge it may reach
         self.stream_id = uuid.uuid4().hex
         self._journal = EventJournal(event_buffer_size)
@@ -183,6 +188,10 @@ class AccountWriter:
         except Exception:
             self.halted = True
             raise
+        if order.status.terminal:
+            # Persistence precedes retirement. Current engine callers retain their local Order.
+            self.orders.pop(order.order_id, None)
+            self.by_key.pop((order.account_id, order.request.client_order_id), None)
 
     def _require_running(self, account_id: str | None = None) -> None:
         if self.halted or (account_id is not None and account_id in self.halted_accounts):
@@ -224,17 +233,9 @@ class AccountWriter:
             balance.reserved += reservation.remaining
             balance.available -= reservation.remaining
         for row in state.orders:
-            order = Order.from_record(row)
-            if (
-                order.request.type is OrderType.MARKET
-                and order.reject_reason == "notional_limit"
-                and "attempted" in order.reject_details
-            ):
-                # Old ledger rows may predate the privacy fix; do not replay their price leak.
-                instrument = self.instruments.get(order.product_id)
-                order.reject_details = _market_notional_details(
-                    order.reject_details, instrument.quote if instrument else "quote currency"
-                )
+            order = self._order_from_record(row)
+            if order.status.terminal:
+                continue
             self.orders[order.order_id] = order
             self.by_key[(account_id, order.request.client_order_id)] = order.order_id
             if (
@@ -243,6 +244,48 @@ class AccountWriter:
                 and row["market_band_price"] is not None
             ):
                 self.band_prices[order.order_id] = Decimal(row["market_band_price"])
+
+    def _order_from_record(self, row) -> Order:
+        order = Order.from_record(row)
+        if (
+            order.request.type is OrderType.MARKET
+            and order.reject_reason == "notional_limit"
+            and "attempted" in order.reject_details
+        ):
+            # Old ledger rows may predate the privacy fix; do not replay their price leak.
+            instrument = self.instruments.get(order.product_id)
+            order.reject_details = _market_notional_details(
+                order.reject_details, instrument.quote if instrument else "quote currency"
+            )
+        return order
+
+    def lookup_order(self, account_id: str, *, client_order_id=None, order_id=None) -> Order | None:
+        """Resolve an exact owner/key or owner/ID; absence is authoritative only after SQL."""
+        order_id = order_id or None
+        resolved_id = order_id or self.by_key.get((account_id, client_order_id))
+        order = self.orders.get(resolved_id) if resolved_id else None
+        if order is not None:
+            return order if order.account_id == account_id else None
+        if self.ledger is None:
+            return None
+        row = self.ledger.load_order(account_id, client_order_id=client_order_id, order_id=order_id)
+        return None if row is None else self._order_from_record(row)
+
+    @contextmanager
+    def submission_lookup(self, account_id: str, client_order_id: str):
+        """Share one writer-resolved lookup with the synchronous transport pre-check.
+
+        Consumed at submit entry, never a reusable negative cache or caller-supplied freshness.
+        There must be no await or other admission between this lookup and submit.
+        """
+        if self._submission_resolution is not None:
+            raise RuntimeError("nested submission lookup")
+        order = self.lookup_order(account_id, client_order_id=client_order_id)
+        self._submission_resolution = (account_id, client_order_id, order)
+        try:
+            yield order
+        finally:
+            self._submission_resolution = None
 
     def deposit(self, account_id: str, asset: str, amount: Decimal, event_key: str) -> None:
         self._require_running(account_id)
@@ -274,6 +317,7 @@ class AccountWriter:
     def submit(self, account_id: str, request: OrderRequest | Mapping, now_ns: int) -> Order:
         """Accept or reject an order. Raises OrderError only for a malformed request or a reused
         idempotency key; every other refusal is a recorded REJECTED order."""
+        resolution, self._submission_resolution = self._submission_resolution, None
         product = None
         failure = "internal_error"
         try:
@@ -289,8 +333,12 @@ class AccountWriter:
                 request = OrderRequest.parse(request)
             product = request.product_id
             key = (account_id, request.client_order_id)
-            if (existing := self.by_key.get(key)) is not None:
-                order = self.orders[existing]
+            order = (
+                resolution[2]
+                if resolution is not None and resolution[:2] == key
+                else self.lookup_order(account_id, client_order_id=request.client_order_id)
+            )
+            if order is not None:
                 if order.request != request:
                     raise field_error(
                         "idempotency_key_reused",
@@ -431,9 +479,7 @@ class AccountWriter:
         in between stand. Idempotent: a finished order, or one already being cancelled, is
         returned unchanged."""
         self._require_running(account_id)
-        if order_id is None and client_order_id is not None:
-            order_id = self.by_key.get((account_id, client_order_id))
-        order = self.orders.get(order_id) if order_id else None
+        order = self.lookup_order(account_id, order_id=order_id, client_order_id=client_order_id)
         if order is None or order.account_id != account_id:
             raise OrderError("unknown_order", str(order_id or client_order_id))
         if order.status.terminal or order.cancel_requested_at_ns is not None:

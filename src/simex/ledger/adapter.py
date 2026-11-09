@@ -21,6 +21,23 @@ from .migration_runner import apply_migrations
 FailureHook = Callable[[str], None | Awaitable[None]]
 
 
+# Shared by recovery and point lookup: a replay must hydrate the original snapshot.
+ORDER_COLUMNS = (
+    "order_id, account_id, client_order_id, request->>'product_id' AS product_id, "
+    "request->>'side' AS side, request->>'type' AS type, "
+    "request->>'quantity' AS quantity, request->>'limit_price' AS limit_price, status, "
+    "reasoning, created_at_ns, effective_at_ns, filled_quantity, filled_notional, "
+    "maker_notional, taker_notional, fees, fill_count, reject_reason, "
+    "cancel_requested_at_ns, cancel_effective_at_ns, closed_at_ns, "
+    "market_band_price, reject_details"
+)
+# Keep identical to migration 009; tests compare both with orders.TERMINAL and EXPLAIN it.
+LIVE_ORDER_PREDICATE = "status NOT IN ('filled', 'cancelled', 'expired', 'rejected')"
+RECOVERY_ORDERS_SQL = (
+    f"SELECT {ORDER_COLUMNS} FROM orders WHERE account_id=$1 AND {LIVE_ORDER_PREDICATE}"
+)
+
+
 class LedgerIntegrityError(RuntimeError):
     """An immutable domain row was replayed with different values."""
 
@@ -350,37 +367,40 @@ class LedgerAdapter:
             )
         return sequence
 
+    async def load_order(
+        self, account_id: str, *, client_order_id: str | None = None, order_id: str | None = None
+    ) -> dict[str, Any] | None:
+        column, value = (
+            ("order_id", order_id) if order_id is not None else ("client_order_id", client_order_id)
+        )
+        row = await self.connection.fetchrow(
+            f"SELECT {ORDER_COLUMNS} FROM orders WHERE account_id=$1 AND {column}=$2",
+            account_id,
+            value,
+        )
+        return None if row is None else dict(row)
+
     async def load_account(self, account_id: str) -> AccountState:
-        orders = await self.connection.fetch(
-            "SELECT order_id, account_id, client_order_id, request->>'product_id' AS product_id, "
-            "request->>'side' AS side, request->>'type' AS type, "
-            "request->>'quantity' AS quantity, request->>'limit_price' AS limit_price, status, "
-            "reasoning, "
-            "created_at_ns, effective_at_ns, filled_quantity, filled_notional, maker_notional, "
-            "taker_notional, fees, fill_count, reject_reason, cancel_requested_at_ns, "
-            "cancel_effective_at_ns, closed_at_ns, market_band_price, reject_details "
-            "FROM orders WHERE account_id=$1",
-            account_id,
-        )
-        reservations = await self.connection.fetch(
-            "SELECT order_id, account_id, asset, remaining FROM account_reservations "
-            "WHERE account_id=$1",
-            account_id,
-        )
-        balances = await self.connection.fetch(
-            "SELECT account_id, asset, SUM(amount) AS total FROM ledger_postings "
-            "WHERE account_id=$1 GROUP BY account_id, asset",
-            account_id,
-        )
-        latest_sequence = await self.connection.fetchval(
-            "SELECT max(transaction_sequence) FROM ledger_postings WHERE account_id=$1",
-            account_id,
-        )
+        # One coherent cut; no traffic starts until recovery succeeds in full.
+        async with self.connection.transaction(isolation="repeatable_read", readonly=True):
+            orders = await self.connection.fetch(RECOVERY_ORDERS_SQL, account_id)
+            reservations = await self.connection.fetch(
+                "SELECT order_id, account_id, asset, remaining FROM account_reservations "
+                "WHERE account_id=$1",
+                account_id,
+            )
+            balances = await self.connection.fetch(
+                "SELECT account_id, asset, SUM(amount) AS total, "
+                "MAX(transaction_sequence) AS latest_sequence FROM ledger_postings "
+                "WHERE account_id=$1 GROUP BY account_id, asset",
+                account_id,
+            )
+        latest = max((row["latest_sequence"] for row in balances), default=None)
         return AccountState(
             tuple(dict(row) for row in orders),
             tuple(dict(row) for row in reservations),
-            tuple(dict(row) for row in balances),
-            latest_sequence,
+            tuple({key: row[key] for key in ("account_id", "asset", "total")} for row in balances),
+            latest,
         )
 
     async def history(self, account_id: str, limit: int = 100) -> list[dict[str, Any]]:

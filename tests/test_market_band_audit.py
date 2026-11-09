@@ -169,7 +169,8 @@ def test_restore_loads_only_live_market_bands_and_pending_order_still_fills(
     restored = AccountWriter(DEFAULT_INSTRUMENTS, FeeSchedule(), OpenGate(), DELAY, ledger=ledger)
     restored.restore("alice")
     assert restored.band_prices == {pending.order_id: pending_band}
-    assert restored.orders[completed.order_id].status is OrderStatus.FILLED
+    assert completed.order_id not in restored.orders
+    assert restored.lookup_order("alice", order_id=completed.order_id).status is OrderStatus.FILLED
     assert row(pnl_dsn, completed.order_id)["market_band_price"] == historical_band
     assert row(pnl_dsn, limit.order_id)["market_band_price"] is None
     assert restored.accounts.balance("alice", "USD").available == expected_available
@@ -180,7 +181,8 @@ def test_restore_loads_only_live_market_bands_and_pending_order_still_fills(
     recovered_engine.book.apply(_book_snapshot(T0 + 1_000_000_000, "2"))
     recovered_engine.restore_orders(restored.open_orders("alice"))
     recovered_engine.advance(pending.effective_at_ns)
-    assert restored.orders[pending.order_id].status is OrderStatus.FILLED
+    assert pending.order_id not in restored.orders
+    assert restored.lookup_order("alice", order_id=pending.order_id).status is OrderStatus.FILLED
     assert restored.band_prices == {}
     assert pending.order_id not in restored.accounts.reservations
     assert row(pnl_dsn, pending.order_id)["market_band_price"] == pending_band
