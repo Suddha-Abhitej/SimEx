@@ -245,44 +245,42 @@ def postgres_dsn():
 
 async def _postgres_setup(dsn, schema):
     connection = await asyncpg.connect(dsn)
-    await connection.execute(f'SET search_path TO "{schema}"')
-    await apply_migrations(connection)
-    expected = {
-        "account_reservations",
-        "fills",
-        "ledger_events",
-        "ledger_postings",
-        "ledger_transactions",
-        "orders",
-        "outbox",
-        "reconciliation_state",
-        "reconciliation_violations",
-        "schema_migrations",
-    }
-    resolved = {
-        row["tablename"]
-        for row in await connection.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname = $1", schema
-        )
-    }
-    assert expected <= resolved
-    for table in expected:
-        assert (
-            await connection.fetchval(
-                "SELECT n.nspname || '.' || c.relname "
-                "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
-                "WHERE c.oid = to_regclass($1)",
-                f"{schema}.{table}",
+    try:
+        await connection.execute(f'SET search_path TO "{schema}"')
+        await apply_migrations(connection)
+        expected = {
+            "account_reservations",
+            "fills",
+            "ledger_events",
+            "ledger_postings",
+            "ledger_transactions",
+            "orders",
+            "outbox",
+            "reconciliation_state",
+            "reconciliation_violations",
+            "schema_migrations",
+        }
+        resolved = {
+            row["tablename"]
+            for row in await connection.fetch(
+                "SELECT tablename FROM pg_tables WHERE schemaname = $1", schema
             )
-            == f"{schema}.{table}"
-        )
-    public_ledger_tables = await connection.fetchval(
-        "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' "
-        "AND tablename = ANY($1::text[])",
-        list(expected),
-    )
-    assert public_ledger_tables == 0
-    await connection.close()
+        }
+        assert expected <= resolved
+        assert await connection.fetchval("SELECT current_schema()") == schema
+        assert await connection.fetchval("SELECT current_schemas(false)") == [schema]
+        for table in expected:
+            assert (
+                await connection.fetchval(
+                    "SELECT n.nspname || '.' || c.relname "
+                    "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE c.oid = to_regclass($1)",
+                    table,
+                )
+                == f"{schema}.{table}"
+            )
+    finally:
+        await connection.close()
 
 
 def _schema_dsn(dsn, schema):

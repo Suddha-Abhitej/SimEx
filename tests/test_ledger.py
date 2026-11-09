@@ -73,24 +73,18 @@ async def connection_or_skip():
                 "SELECT tablename FROM pg_tables WHERE schemaname = $1", schema
             )
         }
-        for table in ("ledger_postings", "reconciliation_state"):
+        assert await connection.fetchval("SELECT current_schema()") == schema
+        assert await connection.fetchval("SELECT current_schemas(false)") == [schema]
+        for table in expected:
             assert (
                 await connection.fetchval(
                     "SELECT n.nspname || '.' || c.relname "
                     "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
                     "WHERE c.oid = to_regclass($1)",
-                    f"{schema}.{table}",
+                    table,
                 )
                 == f"{schema}.{table}"
             )
-        assert (
-            await connection.fetchval(
-                "SELECT count(*) FROM pg_tables WHERE schemaname = 'public' "
-                "AND tablename = ANY($1::text[])",
-                list(expected),
-            )
-            == 0
-        )
         return IsolatedConnection(connection, dsn, schema)
     except Exception:
         await connection.close()
