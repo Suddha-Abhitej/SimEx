@@ -127,7 +127,10 @@ def test_reasoning_and_history_survive_ledger_restart():
             {},
             RiskLimits({}, {}, {}),
         ).history()
-        assert restored.orders[order.order_id].request.reasoning == reasoning
+        assert not restored.orders
+        assert (
+            restored.lookup_order("owner", order_id=order.order_id).request.reasoning == reasoning
+        )
         assert history["ok"]
         assert history["fills"][0]["reasoning"] == reasoning
         assert Decimal(history["fills"][0]["price"]) == Decimal("100")
@@ -205,7 +208,10 @@ def test_buy_and_hold_does_not_rebuy_after_ledger_restart():
 
             assert rebuilt.tick() == {"ok": True, "action": "none"}
             assert rebuilt.tick() == {"ok": True, "action": "none"}
-            assert len(restored.writer.orders) == 1
+            assert not restored.writer.orders
+            original = restored.writer.lookup_order("owner", order_id=order.order_id)
+            assert original.fill_count == 1
+            assert original == order
             assert len(restored.history()["fills"]) == 1
             ledger.close()
             ledger = None

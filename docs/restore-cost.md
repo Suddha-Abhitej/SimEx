@@ -222,3 +222,34 @@ measurement, and the shared two-core target should reach the startup cliff soone
 Only counts and system measurements belong in this document, tool output or issue comments
 ([ADR 0010](adr/0010-personal-use-and-gemini-market-data.md)). No prices, amounts, individual
 order/fill identifiers or timestamps, rationale text, feed data, tokens, DSNs or row dumps.
+
+
+## Upgrade
+
+ADR [0027](adr/0027-live-order-recovery-and-durable-idempotency.md) bounds durable order recovery.
+The original measurements above describe eager recovery before that fix. Recovery now retains
+live orders only, uses durable historical key lookup, and has a five-second per-account load
+budget; ordinary ledger calls remain at 500 ms. The account posting fold remains linear.
+
+Migration 009 creates a partial index. It changes no columns or audit history and is transactional.
+Index creation scans history and may exceed the migration runner's existing five-second allowance
+on a large ledger. Stop the exchange writer and prebuild it with an owner maintenance connection
+before starting the new version when necessary:
+
+```sh
+psql "$EXCHANGE_LEDGER_DSN" -v ON_ERROR_STOP=1 <<'SQL'
+CREATE INDEX IF NOT EXISTS orders_live_account_idx ON orders (account_id, order_id)
+WHERE status NOT IN ('filled', 'cancelled', 'expired', 'rejected');
+SQL
+```
+
+Use the ledger's existing schema/search path. Do not change the predicate or wrap CONCURRENTLY
+inside the migration runner. A failed transactional build rolls back; verify a pre-existing index
+has the expected definition. The subsequent `IF NOT EXISTS` migration records its version without
+rebuilding the prebuilt index. Do not put credentials in committed commands or reports.
+
+The current harness reports five-second `default`, 500 ms `compatibility`, and 120-second
+`diagnostic` attempts separately. Diagnostic success is never successful default startup. The
+success criterion, set before measuring, is three successful default attempts at 1M lifetime
+orders with 16 live orders. If the posting fold binds earlier, publish that limit and carry it
+into a successor issue; do not conceal it with another timeout increase.

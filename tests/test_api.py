@@ -2,11 +2,11 @@ import asyncio
 import inspect
 import threading
 from decimal import Decimal
-from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from test_account_writer_ledger import MemoryLedger
 from test_mcp import ClosedGate, make_tools, order_payload
 
 from simex.api import create_app, validate_api_configuration
@@ -33,11 +33,9 @@ ROUTES = [
 def api_tools():
     tools = make_tools()
     tools.writer.deposit("owner", "USD", Decimal("1000"), "synthetic-seed")
-    tools.writer.ledger = SimpleNamespace(
-        save_order=lambda *args: None,
-        history=lambda account, limit: [],
-        portfolio_fills=lambda account, sequence: [],
-    )
+    tools.writer.ledger = MemoryLedger()
+    tools.writer.ledger.history = lambda account, limit: []
+    tools.writer.ledger.portfolio_fills = lambda account, sequence: []
     return tools
 
 

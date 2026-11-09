@@ -138,7 +138,7 @@ def test_closed_watcher_does_not_mask_ledger_failure_while_halting():
     def fail(*args):
         raise failure
 
-    writer.ledger = SimpleNamespace(save_order=fail)
+    writer.ledger = SimpleNamespace(save_order=fail, load_order=lambda *a, **kw: None)
     stale = closed_loop_watch(writer._journal)
     try:
         with pytest.raises(LedgerHalted) as raised:
@@ -160,7 +160,9 @@ def test_closed_watcher_does_not_turn_committed_fill_into_engine_exception():
         committed.append(fill.fill_id)
         return 1
 
-    writer.ledger = SimpleNamespace(record_fill=commit, save_order=lambda *args: None)
+    writer.ledger = SimpleNamespace(
+        record_fill=commit, save_order=lambda *args: None, load_order=lambda *a, **kw: None
+    )
     order = writer.submit("owner", order_payload(), 1)
     writer.activate(order.order_id, order.effective_at_ns)
     stale = closed_loop_watch(writer._journal)

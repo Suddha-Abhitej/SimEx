@@ -134,34 +134,38 @@ class ExchangeTools:
             order_request.check(instrument)
             quantity = order_request.quantity
             price = order_request.limit_price
-            if (
-                price is None
-                and (self.account_id, order_request.client_order_id) not in self.writer.by_key
-            ):
-                decision = self.writer.gate.check(order_request.product_id, self.clock_ns())
-                if not decision.open:
-                    return {"ok": False, "reason": "no_band_price"}
-                else:
-                    best = (
-                        decision.best_ask if order_request.side is Side.BUY else decision.best_bid
-                    )
-                    if best is None:
-                        return {"ok": False, "reason": "no_band_price"}
-                    price = band_price(best, order_request.side, instrument)
         except OrderError as exc:
             return {"ok": False, "reason": exc.reason, **exc.details}
         except (KeyError, TypeError, ValueError):
             return {"ok": False, "reason": "bad_order"}
-        if not quantity.is_finite() or (price is not None and not price.is_finite()):
-            return {"ok": False, "reason": "bad_decimal"}
-        if self.writer.risk_limits is None:
-            return {"ok": False, "reason": "risk_limits_missing"}
-        if self.account_id in self.writer.halted_accounts:
-            return {"ok": False, "reason": "account_halted"}
-        if self.writer.halted:
-            return {"ok": False, "reason": "writer_halted"}
+        # Preserve the admission timestamp through the blocking lookup.
+        now_ns = self.clock_ns()
         try:
-            order = self.writer.submit(self.account_id, payload, self.clock_ns())
+            with self.writer.submission_lookup(
+                self.account_id, order_request.client_order_id
+            ) as existing:
+                if price is None and existing is None:
+                    decision = self.writer.gate.check(order_request.product_id, self.clock_ns())
+                    if not decision.open:
+                        return {"ok": False, "reason": "no_band_price"}
+                    else:
+                        best = (
+                            decision.best_ask
+                            if order_request.side is Side.BUY
+                            else decision.best_bid
+                        )
+                        if best is None:
+                            return {"ok": False, "reason": "no_band_price"}
+                        price = band_price(best, order_request.side, instrument)
+                if not quantity.is_finite() or (price is not None and not price.is_finite()):
+                    return {"ok": False, "reason": "bad_decimal"}
+                if self.writer.risk_limits is None:
+                    return {"ok": False, "reason": "risk_limits_missing"}
+                if self.account_id in self.writer.halted_accounts:
+                    return {"ok": False, "reason": "account_halted"}
+                if self.writer.halted:
+                    return {"ok": False, "reason": "writer_halted"}
+                order = self.writer.submit(self.account_id, payload, now_ns)
         except LedgerHalted:
             return {"ok": False, "reason": "ledger_halted"}
         except OrderError as exc:
@@ -245,15 +249,16 @@ class ExchangeTools:
             return {"ok": False, "reason": "writer_halted"}
         if order_id is None and client_order_id is None:
             return {"ok": False, "reason": "missing_order_reference"}
-        resolved_id = order_id or self.writer.by_key.get((self.account_id, client_order_id or ""))
-        order = self.writer.orders.get(resolved_id) if resolved_id else None
-        if order is None or order.account_id != self.account_id:
-            return {"ok": False, "reason": "unknown_order"}
-        if order.status.terminal:
-            return {"ok": False, "reason": "order_terminal"}
-        if order.cancel_requested_at_ns is not None:
-            return {"ok": False, "reason": "cancel_already_requested"}
         try:
+            order = self.writer.lookup_order(
+                self.account_id, order_id=order_id, client_order_id=client_order_id
+            )
+            if order is None or order.account_id != self.account_id:
+                return {"ok": False, "reason": "unknown_order"}
+            if order.status.terminal:
+                return {"ok": False, "reason": "order_terminal"}
+            if order.cancel_requested_at_ns is not None:
+                return {"ok": False, "reason": "cancel_already_requested"}
             order = self.writer.request_cancel(
                 self.account_id,
                 self.clock_ns(),

@@ -43,6 +43,9 @@ class FakeLedger:
         self.sequence = 1
         return self.sequence
 
+    def load_order(self, account_id, **kwargs):
+        return None
+
     def save_order(self, order, reservation, band_price=None):
         pass
 

@@ -36,11 +36,15 @@ class SyncLedger:
         metrics: LedgerMetrics | None = None,
         hard_timeout_seconds: float = HARD_TIMEOUT_SECONDS,
         cancellation_grace_seconds: float = CANCELLATION_GRACE_SECONDS,
+        restore_timeout_seconds: float = STARTUP_TIMEOUT_SECONDS,
     ) -> None:
         if hard_timeout_seconds <= 0:
             raise ValueError("hard_timeout_seconds must be positive")
         if cancellation_grace_seconds <= 0:
             raise ValueError("cancellation_grace_seconds must be positive")
+        if restore_timeout_seconds <= 0:
+            raise ValueError("restore_timeout_seconds must be positive")
+        self.restore_timeout_seconds = restore_timeout_seconds
         self._dsn = dsn
         self.metrics = metrics
         self.hard_timeout_seconds = hard_timeout_seconds
@@ -174,7 +178,22 @@ class SyncLedger:
         )
 
     def load_account(self, account_id: str) -> AccountState:
-        return self._call(lambda adapter: adapter.load_account(account_id))
+        return self._call(
+            lambda adapter: adapter.load_account(account_id), timeout=self.restore_timeout_seconds
+        )
+
+    def load_order(
+        self, account_id: str, *, client_order_id: str | None = None, order_id: str | None = None
+    ) -> dict[str, Any] | None:
+        # An uncertain lookup is never retried as a new admission. Ordinary 500 ms bound.
+        try:
+            return self._call(
+                lambda adapter: adapter.load_order(
+                    account_id, client_order_id=client_order_id, order_id=order_id
+                )
+            )
+        except Exception as exc:
+            raise LedgerHalted("historical order lookup failed") from exc
 
     def history(self, account_id: str, limit: int = 100) -> list[dict[str, Any]]:
         return self._call(lambda adapter: adapter.history(account_id, limit))

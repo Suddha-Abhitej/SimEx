@@ -47,7 +47,7 @@ from restore_cost_fixture import (
 from simex.exchange import DEFAULT_INSTRUMENTS, AccountWriter
 from simex.exchange.orders import OrderError
 from simex.ledger import LedgerHalted, SyncLedger
-from simex.ledger.sync import HARD_TIMEOUT_SECONDS
+from simex.ledger.sync import HARD_TIMEOUT_SECONDS, STARTUP_TIMEOUT_SECONDS
 
 GIB = 1024**3
 DIAGNOSTIC_SECONDS = 120
@@ -70,8 +70,15 @@ RESULT_FIELDS = frozenset(
         "restored_orders",
         "restored_keys",
         "checked_keys",
+        "active_fetch_ns",
+        "posting_fold_ns",
     }
 )
+RESULT_FIELDS |= {"lookup_benchmark_ok", "lookup_first_miss_ns"} | {
+    f"lookup_{case}_{stat}"
+    for case in ("miss", "live", "terminal", "conflict")
+    for stat in ("count", "median_ns", "p99_ns")
+}
 STATUSES = {"ok", "timeout", "ledger_halted", "error", "rss_limit", "wall_limit", "memory_pressure"}
 
 
@@ -158,6 +165,9 @@ class LoadProbe:
         self.elapsed = 0
         self.counts = {}
 
+    def __getattr__(self, name):
+        return getattr(self.ledger, name)
+
     def load_account(self, account):
         started = time.perf_counter_ns()
         try:
@@ -173,12 +183,39 @@ class LoadProbe:
             self.elapsed = time.perf_counter_ns() - started
 
 
+class QueryProbe:
+    """Time existing recovery queries without retaining their rows or changing SQL."""
+
+    def __init__(self, connection):
+        self.connection = connection
+        self.elapsed = {}
+
+    def __getattr__(self, name):
+        return getattr(self.connection, name)
+
+    async def fetch(self, sql, *args):
+        started = time.perf_counter_ns()
+        try:
+            return await self.connection.fetch(sql, *args)
+        finally:
+            phase = (
+                "posting_fold_ns"
+                if "FROM ledger_postings" in sql
+                else "active_fetch_ns"
+                if "FROM orders" in sql
+                else None
+            )
+            if phase:
+                self.elapsed[phase] = time.perf_counter_ns() - started
+
+
 def verify_keys(writer, count: int) -> int:
     checked = 0
     for index in (0, ACTIVE, count - 1):
         request = intention(index)
-        original = writer.orders[writer.by_key[(ACCOUNT, request.client_order_id)]]
-        assert writer.submit(ACCOUNT, request, 0) is original
+        original = writer.lookup_order(ACCOUNT, client_order_id=request.client_order_id)
+        assert original is not None
+        assert writer.submit(ACCOUNT, request, 0) == original
         try:
             writer.submit(ACCOUNT, replace(request, quantity=request.quantity + Decimal("0.1")), 0)
         except OrderError as exc:
@@ -186,7 +223,47 @@ def verify_keys(writer, count: int) -> int:
         else:
             raise AssertionError("historical key allowed a different request")
         checked += 1
+    assert len(writer.orders) == len(writer.by_key) == ACTIVE
     return checked
+
+
+def lookup_benchmark(writer, count: int) -> dict:
+    """Bounded writer/read microbenchmark; seeded caches, not an HTTP capacity claim."""
+    request = intention(count - 1)
+    different = replace(request, reasoning=request.reasoning + " different")
+    before = writer.balance_snapshot(ACCOUNT)
+    result = {"lookup_benchmark_ok": 0}
+    started = time.perf_counter_ns()
+    assert writer.lookup_order(ACCOUNT, client_order_id="absent-first") is None
+    result["lookup_first_miss_ns"] = time.perf_counter_ns() - started
+    for case in ("miss", "live", "terminal", "conflict"):
+        times = []
+        for index in range(100):
+            started = time.perf_counter_ns()
+            if case == "miss":
+                assert writer.lookup_order(ACCOUNT, client_order_id=f"absent-{index}") is None
+            elif case == "conflict":
+                try:
+                    writer.submit(ACCOUNT, different, 0)
+                except OrderError as exc:
+                    assert exc.reason == "idempotency_key_reused"
+                else:
+                    raise AssertionError("historical conflict accepted")
+            else:
+                writer.submit(ACCOUNT, intention(0) if case == "live" else request, 0)
+            times.append(time.perf_counter_ns() - started)
+        times.sort()
+        result.update(
+            {
+                f"lookup_{case}_count": len(times),
+                f"lookup_{case}_median_ns": int(statistics.median(times)),
+                f"lookup_{case}_p99_ns": times[98],
+            }
+        )
+    assert writer.balance_snapshot(ACCOUNT) == before
+    assert len(writer.orders) == len(writer.by_key) == ACTIVE
+    result["lookup_benchmark_ok"] = 1
+    return result
 
 
 def worker(config: dict) -> dict:
@@ -198,8 +275,17 @@ def worker(config: dict) -> dict:
     ledger = None
     result = {"status": "error"}
     try:
-        kwargs = {} if config["mode"] == "default" else {"hard_timeout_seconds": DIAGNOSTIC_SECONDS}
+        timeout = (
+            STARTUP_TIMEOUT_SECONDS
+            if config["mode"] == "default"
+            else HARD_TIMEOUT_SECONDS
+            if config["mode"] == "compatibility"
+            else DIAGNOSTIC_SECONDS
+        )
+        kwargs = {"restore_timeout_seconds": timeout}
         ledger = SyncLedger(relay_dsn(dsn, relay.port) if relay else dsn, **kwargs)
+        queries = QueryProbe(ledger._adapter.connection)
+        ledger._adapter.connection = queries
         probe = LoadProbe(ledger)
         writer = AccountWriter(DEFAULT_INSTRUMENTS, FEES, None, 200_000_000, ledger=probe)
         gc.collect()
@@ -233,11 +319,19 @@ def worker(config: dict) -> dict:
                 peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
             )
         result.update(
-            probe.counts, restored_orders=len(writer.orders), restored_keys=len(writer.by_key)
+            probe.counts,
+            **({} if relay else queries.elapsed),
+            restored_orders=len(writer.orders),
+            restored_keys=len(writer.by_key),
         )
         if result["status"] == "ok":
-            assert len(writer.orders) == len(writer.by_key) == config["orders"]
+            assert len(writer.orders) == len(writer.by_key) == ACTIVE
             assert len(writer.accounts.reservations) == ACTIVE
+            if config["mode"] == "default":
+                try:
+                    result.update(lookup_benchmark(writer, config["orders"]))
+                except LedgerHalted:
+                    result["lookup_benchmark_ok"] = 0
             result["checked_keys"] = verify_keys(writer, config["orders"])
         return result
     finally:
@@ -296,7 +390,7 @@ def run_worker(dsn: str, count: int, mode: str, budget: int) -> dict:
                         time.perf_counter() - started,
                         rss(process.pid),
                         memory_info()["MemAvailable"],
-                        10 if mode == "default" else 150,
+                        10 if mode in {"default", "compatibility"} else 150,
                         budget,
                     )
                     if reason:
@@ -423,16 +517,19 @@ async def measure(args) -> dict:
         min(shutil.disk_usage(Path.cwd()).free, args.seed_disk_budget_gib * GIB),
     )
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "complete": False,
         "host": host_metadata(),
         "policy": {
-            "default_timeout_ns": int(HARD_TIMEOUT_SECONDS * 10**9),
+            "default_timeout_ns": int(STARTUP_TIMEOUT_SECONDS * 10**9),
+            "compatibility_timeout_ns": int(HARD_TIMEOUT_SECONDS * 10**9),
             "diagnostic_timeout_seconds": DIAGNOSTIC_SECONDS,
             "runs_per_mode": 3,
             "worker_rss_budget_bytes": budget,
             "seed_disk_budget_bytes": args.seed_disk_budget_gib * GIB,
             "active_orders": ACTIVE,
+            "criterion_orders": 1000000,
+            "criterion_successes": 3,
             "rejected_orders": REJECTED,
             "rationale_bytes": len(RATIONALE.encode()),
             "cache": "seeded; cache uncontrolled; no cache flush",
@@ -453,13 +550,27 @@ async def measure(args) -> dict:
 
             connection = await asyncpg.connect(target)
             try:
+                # Simulate the additive upgrade from migration 008, before timed restores.
+                await connection.execute("DROP INDEX orders_live_account_idx")
+                await connection.execute("DELETE FROM schema_migrations WHERE version=9")
+                from simex.ledger import LedgerAdapter
+
+                upgrade_start = time.perf_counter_ns()
+                await LedgerAdapter(connection).migrate()
+                upgrade_ns = time.perf_counter_ns() - upgrade_start
                 report["host"]["postgres_version"] = await connection.fetchval(
                     "SHOW server_version"
                 )
             finally:
                 await connection.close()
-            point = {"orders": count, "profile": profile, "seed_counts": counts}
-            for mode in ("default", "diagnostic"):
+            point = {
+                "orders": count,
+                "profile": profile,
+                "seed_counts": counts,
+                "upgrade_ns": upgrade_ns,
+                "upgrade_within_startup_budget": upgrade_ns <= int(STARTUP_TIMEOUT_SECONDS * 10**9),
+            }
+            for mode in ("compatibility", "default", "diagnostic"):
                 runs = []
                 for index in range(3):
                     result = await asyncio.to_thread(run_worker, target, count, mode, budget)
@@ -478,6 +589,9 @@ async def measure(args) -> dict:
                 report["unfilled_comparison"] = point
             # Save completed points only, with explicit censoring; never store row/traffic data.
             report["startup_cliff"] = startup_bracket(report["points"])
+            report["compatibility_cliff"] = startup_bracket(
+                [{**p, "default": p["compatibility"]} for p in report["points"]]
+            )
             temporary = args.json.with_suffix(args.json.suffix + ".tmp")
             temporary.write_text(json.dumps(report, indent=2) + "\n")
             os.replace(temporary, args.json)

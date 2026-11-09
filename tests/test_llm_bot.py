@@ -97,7 +97,7 @@ def ready_tools(ledger=None):
 def settle(tools, *, halt=False):
     for order in tools.writer.open_orders("owner"):
         tools.engines[order.product_id].advance(order.effective_at_ns)
-    if halt and any(order.fill_count for order in tools.writer.orders.values()):
+    if halt and any(e["type"] == "fill" for e in tools.writer.events):
         tools.writer.halt_account("owner")
 
 
@@ -229,7 +229,16 @@ def test_grid_refusal_rounds_down_once_with_fresh_key_and_verbatim_rationale(
         assert D(sent[0]["quantity"]) == D("0.000010001")
         assert D(sent[1]["quantity"]) == D("0.00001000")
         assert sent[0]["reasoning"] == sent[1]["reasoning"] == plan["reasoning"]
-        assert api.call(lambda: list(tools.writer.orders.values())[0].fill_count) == 1
+        assert (
+            api.call(
+                lambda: (
+                    tools.writer.lookup_order(
+                        "owner", client_order_id=sent[1]["client_order_id"]
+                    ).fill_count
+                )
+            )
+            == 1
+        )
     assert plan["quantity"] == "0.000010001"  # The decision itself wasn't mutated.
     assert states[1]["refusals"][0]["reason"] == "bad_quantity"
     assert states[1]["refusals"][0]["increment"] == D("0.00000001")

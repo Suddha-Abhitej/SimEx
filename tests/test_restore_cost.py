@@ -16,7 +16,6 @@ import asyncpg
 import pytest
 
 from simex.ledger import LedgerAdapter
-from simex.ledger.sync import HARD_TIMEOUT_SECONDS
 
 TOOLS = Path(__file__).resolve().parent.parent / "tools"
 spec = importlib.util.spec_from_file_location("restore_driver", TOOLS / "measure_restore_cost.py")
@@ -210,6 +209,9 @@ def test_same_key_and_reuse_guards_are_actually_checked():
         orders = {"order": object()}
         by_key = {(fixture.ACCOUNT, fixture.intention(0).client_order_id): "order"}
 
+        def lookup_order(self, *args, **kwargs):
+            return self.orders["order"]
+
         def submit(self, *args):
             return self.orders["order"]
 
@@ -231,6 +233,12 @@ def test_small_copy_seed_matches_real_adapter_and_actual_recovery(
                 connection = await asyncpg.connect(dsn)
                 try:
                     copied = await LedgerAdapter(connection).load_account(fixture.ACCOUNT)
+                    all_copied = [
+                        await LedgerAdapter(connection).load_order(
+                            fixture.ACCOUNT, client_order_id=fixture.intention(i).client_order_id
+                        )
+                        for i in range(36)
+                    ]
                     await connection.execute("CREATE SCHEMA reference")
                     await connection.execute("SET search_path TO reference")
                     adapter = LedgerAdapter(connection)
@@ -248,6 +256,12 @@ def test_small_copy_seed_matches_real_adapter_and_actual_recovery(
                         else:
                             await adapter.save_order(order, reservation)
                     reference = await adapter.load_account(fixture.ACCOUNT)
+                    assert all_copied == [
+                        await adapter.load_order(
+                            fixture.ACCOUNT, client_order_id=fixture.intention(i).client_order_id
+                        )
+                        for i in range(36)
+                    ]
                     assert sorted(copied.orders, key=lambda r: r["order_id"]) == sorted(
                         reference.orders, key=lambda r: r["order_id"]
                     )
@@ -267,7 +281,7 @@ def test_small_copy_seed_matches_real_adapter_and_actual_recovery(
                     result["orders_rows"]
                     == result["restored_orders"]
                     == result["restored_keys"]
-                    == 36
+                    == fixture.ACTIVE
                 )
                 assert result["reservations_rows"] == 16
                 assert result["balances_rows"] == (2 if profile == "filled" else 1)
@@ -312,11 +326,13 @@ def test_cli_end_to_end_fresh_workers_and_untimed_response_bytes(
     report = json.loads(output.read_text())
     point = report["points"][0]
     assert point["default"]["successes"] == point["diagnostic"]["successes"] == 3
-    assert all(run["restored_orders"] == 36 for run in point["default"]["runs"])
+    assert all(run["restored_orders"] == fixture.ACTIVE for run in point["default"]["runs"])
+    assert all(run["lookup_benchmark_ok"] == 1 for run in point["default"]["runs"])
+    assert all(run["lookup_miss_count"] == 100 for run in point["default"]["runs"])
     assert point["bytes"]["status"] == "ok"
     assert point["bytes"]["response_bytes"] > 0
     assert "restore_ns" not in point["bytes"]
-    assert report["policy"]["default_timeout_ns"] == int(HARD_TIMEOUT_SECONDS * 10**9)
+    assert report["policy"]["default_timeout_ns"] == 5_000_000_000
     assert report["policy"]["diagnostic_timeout_seconds"] == 120
     assert report["policy"]["rationale_bytes"] == 128
     assert all(
@@ -362,7 +378,12 @@ def test_relay_counts_only_server_payload_and_can_exclude_authentication():
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux worker measurement")
 @pytest.mark.parametrize(
-    "mode,expected", [("default", {}), ("diagnostic", {"hard_timeout_seconds": 120})]
+    "mode,expected",
+    [
+        ("default", {"restore_timeout_seconds": 5}),
+        ("compatibility", {"restore_timeout_seconds": 0.5}),
+        ("diagnostic", {"restore_timeout_seconds": 120}),
+    ],
 )
 def test_timeout_is_one_load_attempt_and_preserves_the_production_default(
     monkeypatch, mode, expected
@@ -373,6 +394,9 @@ def test_timeout_is_one_load_attempt_and_preserves_the_production_default(
     class TimedOut:
         def __init__(self, dsn, **kwargs):
             assert kwargs == expected
+            from types import SimpleNamespace
+
+            self._adapter = SimpleNamespace(connection=None)
 
         def load_account(self, account):
             calls.append(account)
@@ -427,6 +451,7 @@ def test_byte_worker_excludes_connection_auth_and_never_reports_relay_timings(mo
     class Ledger:
         def __init__(self, *args, **kwargs):
             relay.received = 100  # Connection/authentication payload.
+            self._adapter = SimpleNamespace(connection=None)
 
         def load_account(self, account):
             relay.received += 200
@@ -440,8 +465,8 @@ def test_byte_worker_excludes_connection_auth_and_never_reports_relay_timings(mo
     class Writer:
         def __init__(self, *args, ledger, **kwargs):
             self.ledger = ledger
-            self.orders = dict.fromkeys(range(36))
-            self.by_key = dict.fromkeys(range(36))
+            self.orders = dict.fromkeys(range(fixture.ACTIVE))
+            self.by_key = dict.fromkeys(range(fixture.ACTIVE))
             self.accounts = SimpleNamespace(reservations=dict.fromkeys(range(16)))
 
         def restore(self, account):

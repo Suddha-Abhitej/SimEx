@@ -21,7 +21,7 @@ records copy [`template.md`](template.md) and take the next number.
 | [0014](0014-order-model-and-fill-model.md) | Order model, per-account balances, and the fill model | Accepted |
 | [0015](0015-live-runner-merge-and-watermark.md) | Live exchange runner: merge by received time, release to a watermark | Accepted |
 | [0016](0016-stale-data-guard-and-fill-timing.md) | Complete stale-data guard and fill timing rule set | Accepted (amended 2026-11-09: lag baseline coverage) |
-| [0017](0017-event-sourced-ledger.md) | Event-sourced ledger and durable fills | Accepted (amended 2026-11-09: commit-budget measurement) |
+| [0017](0017-event-sourced-ledger.md) | Event-sourced ledger and durable fills | Accepted (amended 2026-11-09: commit-budget measurement; amended by 0027: bounded order recovery) |
 | [0018](0018-local-mcp-order-entry.md) | Local MCP order entry over the simulated exchange | Accepted |
 | [0019](0019-baseline-agents.md) | Multi-account baseline agents through the common tool boundary | Accepted |
 | [0020](0020-evaluator-price-series-and-significance.md) | Gemini marks and moving-block significance for private evaluation | Accepted |
@@ -31,3 +31,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0024](0024-private-python-client.md) | Private synchronous Python client, Decimal boundary and acknowledged stream watermark | Accepted; amended for ID pruning and disconnect handling |
 | [0025](0025-ingestor-clock-skew-diagnostic.md) | Sustained negative-lag warning and clock-skew diagnostic gauge semantics | Accepted |
 | [0026](0026-writer-admission-counter-contract.md) | Completed writer admissions, phase-specific rejection counters and failure-contained snapshots | Accepted |
+| [0027](0027-live-order-recovery-and-durable-idempotency.md) | Live-order recovery, durable historical identity and a separate startup budget | Accepted |
