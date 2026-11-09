@@ -368,13 +368,15 @@ def watchdog_reason(
     return None
 
 
-def run_worker(dsn: str, count: int, mode: str, budget: int) -> dict:
+def run_worker(
+    dsn: str, count: int, mode: str, budget: int, *, worker_script: Path | None = None
+) -> dict:
     validate_target(dsn)
     config = {"orders": count, "mode": mode}
     env = os.environ | {WORKER_DSN: dsn, "PYTHONHASHSEED": "0"}
     with tempfile.TemporaryFile(mode="w+b") as output:
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--worker"],
+            [sys.executable, str(Path(worker_script or __file__).resolve()), "--worker"],
             stdin=subprocess.PIPE,
             stdout=output,
             stderr=subprocess.DEVNULL,
