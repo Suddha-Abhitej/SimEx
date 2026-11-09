@@ -34,6 +34,7 @@ from aiokafka.errors import KafkaError
 
 from .audit import AuditAligner, AuditResponse, Release
 from .backoff import Backoff
+from .clock_skew import ClockSkewMonitor
 from .coinbase import CoinbaseAdapter
 from .config import Settings
 from .control import ResyncRequest
@@ -140,6 +141,7 @@ class Ingestor:
         self._last_gap_alarm: float | None = None
 
         pairs = settings.pairs
+        self.clock_skew = {p: ClockSkewMonitor(settings.stale_after_seconds) for p in pairs}
         # Every book starts invalid: nothing downstream has a snapshot yet.
         self.awaiting: set[str] = set(pairs)
         self.last_snapshot: dict[str, float] = {}
@@ -175,6 +177,9 @@ class Ingestor:
                 lambda key=(product, channel): self._seconds_since_message(key)
             )
         for product in pairs:
+            metrics.clock_skew_suspected.labels(product).set_function(
+                lambda p=product: self.clock_skew[p].suspected(self._mono())
+            )
             metrics.awaiting_snapshot.labels(product).set(1)
             metrics.time_since_last_snapshot.labels(product).set_function(
                 lambda p=product: self._seconds_since_snapshot(p)
@@ -502,7 +507,27 @@ class Ingestor:
             log.debug("message carries %d products; published once per product", len(envelopes))
 
         now = self._mono()
+        lag_observed: set[str] = set()
         for item, envelope in zip(parsed.items, envelopes, strict=True):
+            product = item.product_id
+            if (
+                item.channel == LEVEL2
+                and product in self.clock_skew
+                and product not in lag_observed
+            ):
+                lag_observed.add(product)
+                monitor = self.clock_skew[product]
+                if (window := monitor.observe(envelope.lag_ns, now)) is not None:
+                    log.warning(
+                        "suspected clock skew: venue=%s product_id=%s, negative level2 lag for "
+                        "%.3fs (%d observations), lag_ns=%s; check host clock synchronization "
+                        "before relying on absolute lag",
+                        self.venue,
+                        product,
+                        window.last_observed_at - window.started_at,
+                        window.observations,
+                        envelope.lag_ns,
+                    )
             self.last_message[(envelope.product_id, envelope.channel)] = now
             await self._publish(envelope)
             if item.channel == LEVEL2 and item.update_ids is not None:
@@ -740,6 +765,8 @@ class Ingestor:
 
     async def _on_disconnect(self, *, fallback: bool) -> None:
         """Anything sent while disconnected is lost: invalidate the books and record the gap."""
+        for monitor in self.clock_skew.values():
+            monitor.break_coverage()
         detected_at_ns = self._clock_ns()
         self._supersede_refresh(timed_out=fallback)
         if self.resync is None:

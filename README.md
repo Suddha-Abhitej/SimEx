@@ -197,6 +197,13 @@ NTP-synced clock: a clock running behind shows up as negative lag. Check it with
 `w32tm /query /status` on Windows or `timedatectl` on Linux; `tools/gemini_probe.py` measures the
 offset with NTP and prints corrected lag.
 
+The ingestor warns once per episode after 60 seconds of consecutive negative level2 lag with
+at least three observations. `simex_ingest_clock_skew_suspected{venue,product_id}` is 1 while
+that condition is confirmed and fresh; **0 is not evidence of clock synchronization**. Missing
+timestamps, disconnects and stale data require fresh coverage without rearming the warning;
+only a nonnegative observation rearms it. This diagnostic does not correct clocks or alter the
+gate. See [ADR 0025](docs/adr/0025-ingestor-clock-skew-diagnostic.md).
+
 > **Coinbase is for feed research only.** Its terms forbid using the data to benchmark AI agents,
 > so it never feeds the book, matching engine or scoring
 > ([ADR 0010](docs/adr/0010-personal-use-and-gemini-market-data.md)). It runs only with
