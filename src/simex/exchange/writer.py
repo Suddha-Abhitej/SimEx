@@ -37,6 +37,7 @@ from .events import DEFAULT_EVENT_BUFFER_SIZE, EventJournal
 from .fees import FeeSchedule, Liquidity
 from .gate import GateDecision
 from .instruments import BPS, Instrument
+from .order_metrics import OrderObserver
 from .orders import (
     Fill,
     FillCause,
@@ -125,6 +126,7 @@ class AccountWriter:
         *,
         risk_limits: RiskLimits | None = None,
         event_buffer_size: int = DEFAULT_EVENT_BUFFER_SIZE,
+        order_observer: OrderObserver | None = None,
     ) -> None:
         if delay_ns < 0:
             raise ValueError("delay_ns can't be negative")
@@ -135,6 +137,7 @@ class AccountWriter:
         self.accounts = accounts or Accounts()
         self.ledger = ledger
         self.risk_limits = risk_limits
+        self._order_observer = order_observer
         if risk_limits is not None and not set(risk_limits.max_quantity) <= set(self.instruments):
             raise ValueError("risk limits contain an unknown product")
         self._halted = False
@@ -255,43 +258,75 @@ class AccountWriter:
 
     # Orders ------------------------------------------------------------------------------------
 
+    def _observe_order(self, outcome: str, product: str | None, reason: str = "") -> None:
+        observer = self._order_observer
+        if observer is None:
+            return
+        try:
+            observer.observe(outcome, product, reason)
+        except Exception:
+            self._order_observer = None
+            try:
+                observer.disable()
+            except Exception:
+                pass
+
     def submit(self, account_id: str, request: OrderRequest | Mapping, now_ns: int) -> Order:
         """Accept or reject an order. Raises OrderError only for a malformed request or a reused
         idempotency key; every other refusal is a recorded REJECTED order."""
-        self._require_running(account_id)
-        if not isinstance(account_id, str) or not account_id or account_id in SYSTEM_ACCOUNTS:
-            raise OrderError("bad_account", repr(account_id))
-        if not isinstance(request, OrderRequest):
-            request = OrderRequest.parse(request)
-        key = (account_id, request.client_order_id)
-        if (existing := self.by_key.get(key)) is not None:
-            order = self.orders[existing]
-            if order.request != request:
-                raise field_error(
-                    "idempotency_key_reused",
-                    "client_order_id",
-                    "already names a different order; use a new ID for a different order",
-                )
-            return order
+        product = None
+        failure = "internal_error"
+        try:
+            if self.halted:
+                failure = "writer_halted"
+            elif account_id in self.halted_accounts:
+                failure = "account_halted"
+            self._require_running(account_id)
+            failure = "internal_error"
+            if not isinstance(account_id, str) or not account_id or account_id in SYSTEM_ACCOUNTS:
+                raise OrderError("bad_account", repr(account_id))
+            if not isinstance(request, OrderRequest):
+                request = OrderRequest.parse(request)
+            product = request.product_id
+            key = (account_id, request.client_order_id)
+            if (existing := self.by_key.get(key)) is not None:
+                order = self.orders[existing]
+                if order.request != request:
+                    raise field_error(
+                        "idempotency_key_reused",
+                        "client_order_id",
+                        "already names a different order; use a new ID for a different order",
+                    )
+                self._observe_order("replayed", product)
+                return order
 
-        order = Order(
-            order_id=order_id_for(account_id, request.client_order_id),
-            account_id=account_id,
-            request=request,
-            created_at_ns=now_ns,
-            effective_at_ns=now_ns + self.delay_ns,
-        )
-        self.orders[order.order_id] = order
-        self.by_key[key] = order.order_id
-        reason = self._acceptance_problem(order, now_ns)
-        if reason is not None:
-            order.reject(reason, now_ns)
+            order = Order(
+                order_id=order_id_for(account_id, request.client_order_id),
+                account_id=account_id,
+                request=request,
+                created_at_ns=now_ns,
+                effective_at_ns=now_ns + self.delay_ns,
+            )
+            self.orders[order.order_id] = order
+            self.by_key[key] = order.order_id
+            reason = self._acceptance_problem(order, now_ns)
+            if reason is not None:
+                order.reject(reason, now_ns)
+            failure = "persistence_failure"
             self._persist_order(order)
-            self._emit("order_rejected", order=order.to_dict())
-        else:
-            self._persist_order(order)
-            self._emit("order_accepted", order=order.to_dict())
-        return order
+            failure = "internal_error"
+            self._emit(
+                "order_rejected" if reason is not None else "order_accepted", order=order.to_dict()
+            )
+            self._observe_order(
+                "arrival_rejected" if reason is not None else "accepted", product, reason or ""
+            )
+            return order
+        except Exception as exc:
+            if isinstance(exc, OrderError) and failure != "persistence_failure":
+                failure = exc.reason
+            self._observe_order("submit_errors", product, failure)
+            raise
 
     def _acceptance_problem(self, order: Order, now_ns: int) -> str | None:
         request = order.request
@@ -484,6 +519,7 @@ class AccountWriter:
         order.reject_details = _gate_details(reason, order.product_id)
         self._close(order)
         self._emit("order_rejected", order=order.to_dict())
+        self._observe_order("effect_rejected", order.product_id, reason)
 
     def _close(self, order: Order) -> None:
         self.accounts.release(order.order_id)
