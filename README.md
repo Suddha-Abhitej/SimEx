@@ -77,6 +77,8 @@ Full task lists, risks and metrics: [`docs/PLAN.md`](docs/PLAN.md).
 
 Connect a bot with the [Python SDK quickstart](docs/quickstart.md). See the
 [private API contract](docs/private-api.md) for the wire protocol.
+For a long-running private instance, follow the [owner deployment guide](docs/deploy.md) and
+read the [known limits](#known-limits) before choosing a workload.
 
 ## Tech stack
 
@@ -464,13 +466,79 @@ clock read step was 80 ns. Resolution does not establish clock accuracy. Waterma
 50/s, four-client point ranged 0.250–0.276 s in 15 scrapes. The maker sample measures its causal
 feed record, not its resting wait; taker samples are never relabelled as tick-to-fill latency.
 
-**Safety coverage limitation:** no exchange refusals were observed; the feed gate stayed open
-in measured samples and ledger halts stayed zero. However, the rolling-median excess-lag baseline
-remained disabled, an existing defect independently reproduced and tracked in
-[#113](https://github.com/Suddha-Abhitej/SimEx/issues/113). Book/catch-up, receive-age and absolute-lag
-checks remained configured; these results do not validate the mature excess-lag safeguard.
+**Historical safety coverage limitation:** no exchange refusals were observed; the feed gate
+stayed open in measured samples and ledger halts stayed zero. During these runs the rolling-median
+excess-lag baseline remained disabled by [#113](https://github.com/Suddha-Abhitej/SimEx/issues/113),
+subsequently fixed in [#115](https://github.com/Suddha-Abhitej/SimEx/pull/115).
+Book/catch-up, receive-age and absolute-lag checks remained configured. These measurements predate
+the fix and do not validate excess-lag enforcement; see the
+[ADR 0016 amendment](docs/adr/0016-stale-data-guard-and-fill-timing.md#amendment-excess-lag-baseline-coverage-2026-11-09-113).
 Absolute feed lag stays unavailable under [#74](https://github.com/Suddha-Abhitej/SimEx/issues/74).
 The [measurement guide](docs/load-test.md) gives reproduction commands and interpretation limits.
+
+## Known limits
+
+The target is **Oracle ARM64, 2 cores and 12 GB shared by all services**
+([ADR 0006](docs/adr/0006-zero-cost-hosting-oracle-plus-home-archive.md)). It has no measured
+capacity result yet. The figures below are from **2026-11-06, the x86 Ryzen 9 8945HS Linux
+devcontainer**, with local Docker Postgres 16.10/Kafka 3.9.1. See the
+[full measurements](#measured-system-metrics) for hardware, policy, dates and driver commits
+`66d6c05` / `21fcc35`; they are finite shared-laptop experiments, not Oracle guarantees.
+
+| Measurement | Demonstrated result and conditions |
+| --- | --- |
+| Durable acceptance knee | Roughly **44–47 accepted orders/s** at 45–55 offered/s; concurrent SDK connections to **one account**, with increasing client caps raising queueing rather than capacity. Refusals/retries/uncertain outcomes were zero across the measured cohorts; identities were confirmed in SQL. |
+| Taker submit → committed fill | n=700, median **496.217 ms**, sample p99 **519.015 ms**, at 50 offered/s and four clients. Includes the 200 ms anti-cheat delay and watermark hold-back; not tick latency. |
+| Causal tick → committed maker fill | **n=1**, 287.090 ms. One sample does not establish a tail or a p99 capacity/latency guarantee. |
+| Ledger commit path | n=676, median **6.969 ms**, sample p99 **9.000 ms** in that same window; cumulative from transaction start. This does not certify the 50 ms budget for every workload or Oracle. |
+| Clock/sample resolution | Linux nominal resolution **1 ns**, smallest observed positive performance-clock step **80 ns**. Resolution is not absolute accuracy. Historical Windows latency is unreliable at 15.625 ms granularity ([#75](https://github.com/Suddha-Abhitej/SimEx/issues/75)). |
+| Absolute venue feed lag | **Unavailable**: host clock synchronization was unverified ([#74](https://github.com/Suddha-Abhitej/SimEx/issues/74)). A devcontainer does not repair its host clock. |
+
+The per-account writer serializes mutations through a synchronous ledger connection; each filled
+order performs several durable operations and blocks the exchange event loop while waiting.
+The historical ~50 **operations**/s estimate from a 20 ms operation is not a 50-orders/s contract.
+More concurrent clients do not remove that boundary
+([ADR 0017](docs/adr/0017-event-sourced-ledger.md)). Configured order/exposure caps, database
+connection limits and container memory limits are policies/ceilings, not demonstrated capacity.
+
+- **Excess-lag enforcement started with #115.** After deployment, rule 3 becomes eligible after
+  ten minutes of usable coverage plus at least three samples in the current rolling window.
+  A new process/runtime rebuild restarts warm-up; earlier overnight, gate and #24 measurements
+  predate the correction. Watch closure rates and the Grafana baseline gauge reaching 1.
+  The [ADR 0016 amendment](docs/adr/0016-stale-data-guard-and-fill-timing.md#amendment-excess-lag-baseline-coverage-2026-11-09-113)
+  records the semantics; the other feed protections remain independent.
+- **Observability has gaps ([#111](https://github.com/Suddha-Abhitej/SimEx/issues/111)).** There
+  are no submitted/accepted order counters or tick-to-fill histogram. Dashboard refusal counts
+  have **no submission denominator**, so they cannot show an acceptance/refusal fraction for
+  unattended operation. They exclude early request-validation refusals; journal eviction can
+  also lose counted events. A one-off load measurement is not continuous instrumentation.
+- **Restore grows with lifetime orders ([#107](https://github.com/Suddha-Abhitej/SimEx/issues/107)).**
+  Account loading reads every historical order, and the writer retains orders and idempotency
+  keys. Startup time and memory scale with lifetime order count. No measured failure threshold
+  is known; do not delete history or keys as an unreviewed memory workaround.
+- **Gaps pause rather than invent fills.** Resync markers invalidate books until a snapshot;
+  lost prints cannot be recovered into maker fills. Receive-age/absolute-lag checks still apply
+  during baseline warm-up ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md),
+  [ADR 0016](docs/adr/0016-stale-data-guard-and-fill-timing.md)). Late records lose the ordering
+  margin and are applied, not dropped; the 250 ms hold-back is measured, not an absolute delivery
+  guarantee ([ADR 0015](docs/adr/0015-live-runner-merge-and-watermark.md)).
+- **Ledger failure is a stop condition.** Durable startup requires the database. A fill is a
+  committed fact: bounded retries do not silently discard it; persistent failure halts new entry
+  and market-event processing. Reconciliation mismatches fail closed and need investigation.
+  Health/liveness is not permission to trade. Restarts restore committed balances/orders, but
+  not maker queue position or depletion state
+  ([ADR 0017](docs/adr/0017-event-sourced-ledger.md)).
+
+On a clean machine, set **all three** explicit quantity/notional/position limits for **every
+enabled product**, with no defaults. The ledger seeds an account **once**, not on every restart.
+Bots read their **own environment**, not the exchange's `.env`. The
+[private deployment guide](docs/deploy.md) covers these setup steps, SSH first, Access-protected
+Cloudflare access, resource pressure and private backups.
+
+Only architecture and system metrics are shareable: a Grafana system-panel screenshot is fine;
+prices, market data, agent results and equity curves stay private under
+[ADR 0010](docs/adr/0010-personal-use-and-gemini-market-data.md). Neither access path opens a
+public service port or permits an unauthenticated dashboard/API.
 
 ## Decisions
 
