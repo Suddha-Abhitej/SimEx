@@ -173,54 +173,145 @@ def test_sync_ledger_timeout_halts_when_cancellation_does_not_settle():
     run(scenario())
 
 
-def test_sync_ledger_timeout_retry_is_idempotent_after_commit():
+def test_sync_ledger_timeout_retry_is_idempotent_after_commit(monkeypatch):
     async def scenario():
         probe = await connection_or_skip()
         dsn = probe.dsn
-        ledger = SyncLedger(
-            dsn,
-            hard_timeout_seconds=0.01,
-            cancellation_grace_seconds=0.2,
-            metrics=LedgerMetrics(),
-        )
-        calls = 0
+        # The controlled result below injects the timeout; default deadlines do not order it.
+        ledger = SyncLedger(dsn, metrics=LedgerMetrics())
+        committed = threading.Event()
+        settled = threading.Event()
+        watchdog_seconds = 10  # A deadlock fails the test; this never selects a retry.
+        attempts, sequences, stages, tasks, futures = [], [], [], [], []
+        injected = False
         original = ledger._adapter.record_fill
+        submit = asyncio.run_coroutine_threadsafe
 
-        async def delayed_record_fill(*args, **kwargs):
-            nonlocal calls
-            calls += 1
-            if calls == 1:
+        async def hold_first_acknowledgement(*args, **kwargs):
+            tasks.append(asyncio.current_task())
+            attempts.append(args[0].fill_id)
+            assert len(attempts) <= 2, "unexpected additional retry"
+            if len(attempts) == 2:
+                assert settled.is_set(), "retry started before cancellation was settled"
+                assert futures[0].done()
+                stages.append("retry")
+            sequence = await original(*args, **kwargs)
+            sequences.append(sequence)
+            if len(attempts) == 1:
+                stages.append("committed")
+                committed.set()
                 try:
-                    await asyncio.sleep(0.05)
+                    await asyncio.Future()  # Commit is real; only its acknowledgement is held.
                 except asyncio.CancelledError:
-                    await asyncio.sleep(0.01)
-            return await original(*args, **kwargs)
+                    stages.append("cancelled")
+            return sequence
 
-        ledger._adapter.record_fill = delayed_record_fill
+        class ControlledResult:
+            def __init__(self, future, first):
+                self.future = future
+                self.first = first
+
+            def result(self, timeout=None):
+                nonlocal injected
+                if self.first and not injected:
+                    assert committed.wait(watchdog_seconds), "first fill did not commit"
+                    assert not self.future.done(), "first acknowledgement was not held"
+                    injected = True
+                    stages.append("timeout")
+                    raise TimeoutError("deliberately lost the first committed acknowledgement")
+                try:
+                    # Completion, not the caller's deadline, drives settlement and retry.
+                    sequence = self.future.result(timeout=watchdog_seconds)
+                except TimeoutError as exc:
+                    raise AssertionError("ledger test completion watchdog expired") from exc
+                if self.first:
+                    settled.set()
+                    stages.append("settled")
+                else:
+                    stages.append("acknowledged")
+                return sequence
+
+            def cancel(self):
+                return self.future.cancel()
+
+        def controlled_submit(coro, loop):
+            future = submit(coro, loop)
+            first = not futures
+            futures.append(future)
+            return ControlledResult(future, first)
+
+        ledger._adapter.record_fill = hold_first_acknowledgement
         current = fill(f"test-sync-timeout-{os.getpid()}-1")
         try:
-            ledger.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"], None, None)
-            assert calls == 2
+            with monkeypatch.context() as patch:
+                patch.setattr(asyncio, "run_coroutine_threadsafe", controlled_submit)
+                sequence = ledger.record_fill(current, DEFAULT_INSTRUMENTS["BTC-USD"], None, None)
+            assert attempts == [current.fill_id, current.fill_id]
+            assert sequences == [sequence, sequence]
+            assert stages == [
+                "committed",
+                "timeout",
+                "cancelled",
+                "settled",
+                "retry",
+                "acknowledged",
+            ]
+            assert ledger.metrics.timeouts._value.get() == 1
+            assert ledger.metrics.halts._value.get() == 0
             conn = await asyncpg.connect(dsn)
             try:
+                for table, count in (
+                    ("fills", 1),
+                    ("ledger_postings", 5),
+                    ("ledger_transactions", 1),
+                    ("ledger_events", 1),
+                    ("outbox", 1),
+                ):
+                    assert await conn.fetchval(f"SELECT count(*) FROM {table}") == count
+                assert await conn.fetchval("SELECT fill_id FROM fills") == current.fill_id
                 assert (
                     await conn.fetchval(
-                        "SELECT count(*) FROM fills WHERE fill_id = $1", current.fill_id
+                        "SELECT sequence FROM ledger_transactions WHERE transaction_id = $1",
+                        f"fill:{current.fill_id}",
                     )
-                    == 1
+                    == sequence
                 )
-                assert (
-                    await conn.fetchval(
-                        "SELECT count(*) FROM ledger_postings WHERE fill_id = $1",
-                        current.fill_id,
+                for table in ("ledger_events", "outbox"):
+                    assert await conn.fetchval(f"SELECT event_key FROM {table}") == (
+                        f"fill:{current.fill_id}"
                     )
-                    == 5
+                postings = await conn.fetch("SELECT account_id, asset, amount FROM ledger_postings")
+                assert {(p["account_id"], p["asset"]): p["amount"] for p in postings} == {
+                    ("alice", "USD"): Decimal("-10.12"),
+                    ("alice", "BTC"): Decimal("0.1"),
+                    ("_market", "USD"): Decimal("10"),
+                    ("_market", "BTC"): Decimal("-0.1"),
+                    ("_fees", "USD"): Decimal("0.12"),
+                }
+                totals = await conn.fetch(
+                    "SELECT asset, SUM(amount) AS total FROM ledger_postings GROUP BY asset"
                 )
+                assert {p["asset"]: p["total"] for p in totals} == {
+                    "USD": Decimal(0),
+                    "BTC": Decimal(0),
+                }
             finally:
                 await conn.close()
         finally:
-            ledger.close()
-            await probe.close()
+
+            async def drain():
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+            try:
+                submit(drain(), ledger._loop).result(timeout=watchdog_seconds)
+            finally:
+                try:
+                    ledger.close()
+                finally:
+                    await probe.close()
 
     run(scenario())
 
