@@ -166,6 +166,7 @@ class ExchangeRunner:
             ledger=ledger,
             risk_limits=risk_limits,
             event_buffer_size=settings.event_buffer_size,
+            order_observer=metrics.orders,
         )
         if ledger is None:
             log.warning("exchange ledger is disabled; fills are not being persisted")

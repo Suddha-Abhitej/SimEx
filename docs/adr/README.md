@@ -30,3 +30,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0023](0023-private-rest-and-fill-stream.md) | Private REST API and bounded, resumable committed-fill notifications | Accepted |
 | [0024](0024-private-python-client.md) | Private synchronous Python client, Decimal boundary and acknowledged stream watermark | Accepted; amended for ID pruning and disconnect handling |
 | [0025](0025-ingestor-clock-skew-diagnostic.md) | Sustained negative-lag warning and clock-skew diagnostic gauge semantics | Accepted |
+| [0026](0026-writer-admission-counter-contract.md) | Completed writer admissions, phase-specific rejection counters and failure-contained snapshots | Accepted |

@@ -7,6 +7,8 @@ from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram
 from simex.book.orderbook import BookState
 
 from .gate import GateDecision, MarketStatus
+from .instruments import DEFAULT_INSTRUMENTS
+from .order_metrics import OrderMetrics
 
 DELIVERY_BUCKETS = (0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1.0, 5.0)
 LATE_BUCKETS = (0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0, 5.0)
@@ -16,6 +18,8 @@ class RunnerMetrics:
     def __init__(self, registry: CollectorRegistry | None = None) -> None:
         self.registry = registry or CollectorRegistry()
         r = self.registry
+        self.orders = OrderMetrics(DEFAULT_INSTRUMENTS)
+        r.register(self.orders)
         self.events = Counter(
             "simex_exchange_events",
             "Records released to the pair's engine, by channel (level2, trades)",

@@ -36,12 +36,46 @@ All 11 current [alert rules](../prometheus/rules/) have corresponding panels. **
 alerting; Grafana only visualises.** No Grafana alert definitions or duplicate alerting rules
 are provisioned.
 
-Submitted/accepted counters and continuous tick-to-fill latency are missing instrumentation,
-tracked in [#111](https://github.com/Suddha-Abhitej/SimEx/issues/111). Writer rejection rates have
-no submission denominator and exclude request-validation refusals returned before the writer.
-Journal eviction can also undercount them; the exchange dashboard exposes that counter. Recorder
+The provisioned exchange dashboard still uses the legacy rejection counter, which has no
+submission denominator in that panel and excludes request-validation refusals before the writer.
+Journal eviction can also undercount it; the exchange dashboard exposes that counter. Recorder
 unread-offset lag, exchange caught-up flags and watermark lag are distinct measurements. The
 exchange and book do not export numeric unread-offset lag.
+
+### Writer counters available for a dashboard follow-up
+
+[ADR 0026](../../docs/adr/0026-writer-admission-counter-contract.md) defines the new counters:
+`simex_exchange_orders_submitted_total`, `simex_exchange_orders_accepted_total`,
+`simex_exchange_orders_arrival_rejected_total`, `simex_exchange_orders_effect_rejected_total`,
+`simex_exchange_orders_replayed_total` and `simex_exchange_order_submit_errors_total`.
+They count completed calls at `AccountWriter.submit`: request-validation refusals returned
+earlier by `ExchangeTools` are visible only to the client that made them. An accepted order
+can later be rejected at effect. A replay is separate from a new admission; an exception,
+including failed persistence, is a submit error rather than an admission. Counters survive
+runtime rebuilds within a process; restore does not invent admissions from historical orders.
+
+Use this arrival-refusal fraction when adding a panel:
+
+```promql
+sum by (product_id) (rate(simex_exchange_orders_arrival_rejected_total[5m]))
+/
+sum by (product_id) (rate(simex_exchange_orders_submitted_total[5m]))
+```
+
+Use accepted/submitted for acceptance, and show effect rejections separately. A zero denominator
+means unavailable, not a healthy zero. Do not divide legacy `simex_exchange_rejections_total`
+by this denominator, subtract arrivals from that lossy series to estimate effects, or mix
+baseline-only refusal counts with it. Submitted is derived from accepted plus arrival-rejected
+in one immutable snapshot, preventing permanent divergence if telemetry partly fails. If the
+observer fails, all six new families become unavailable, with one best-effort WARNING; do not
+turn their absence into zero. Product/reason labels are bounded; no account IDs or input
+details are exported.
+
+This PR leaves dashboard JSON unchanged. The counter half of **“Missing instrumentation /
+refusal coverage” (exchange panel 1)** and **“Writer rejections per second, by reason”** can be
+updated separately. Continuous tick-to-fill instrumentation remains missing, now tracked by
+[#121](https://github.com/Suddha-Abhitej/SimEx/issues/121); a timer-driven taker fill is not a
+causal tick sample. The one-off #24 measurement does not fill that operational gap.
 
 Absolute feed lag requires a synchronized host clock; persistent negative lag is a clock-skew
 warning ([#74](https://github.com/Suddha-Abhitej/SimEx/issues/74)). Recorder publication age can
@@ -55,4 +89,4 @@ tools; a system-panel screenshot contains none of the market data a scoring scre
 [Dashboard tests](../../tests/test_grafana.py) check exported metric selectors, datasource/mount
 contracts, alert-panel coverage and the absence of Grafana alert definitions. CI additionally
 passes every dashboard expression through promtool, validates monitoring-profile Compose config,
-and runs the existing Prometheus rule tests. The application and trading path are unchanged.
+and runs the existing Prometheus rule tests. Provisioning itself does not change trading.
