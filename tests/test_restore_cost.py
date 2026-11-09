@@ -330,10 +330,18 @@ def test_relay_counts_only_server_payload_and_can_exclude_authentication():
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
 
+    def receive(peer, size):
+        data = bytearray()
+        while len(data) < size:
+            chunk = peer.recv(size - len(data))
+            assert chunk, "connection closed before the complete payload"
+            data.extend(chunk)
+        return bytes(data)
+
     def server():
         with listener, listener.accept()[0] as peer:
             peer.sendall(b"synthetic-auth")
-            assert peer.recv(10) == b"request"
+            assert receive(peer, len(b"request")) == b"request"
             peer.sendall(b"synthetic-response")
 
     thread = threading.Thread(target=server)
@@ -341,10 +349,10 @@ def test_relay_counts_only_server_payload_and_can_exclude_authentication():
     relay = driver.CountingRelay(f"postgresql://127.0.0.1:{listener.getsockname()[1]}/postgres")
     try:
         with socket.create_connection(("127.0.0.1", relay.port)) as client:
-            assert client.recv(100) == b"synthetic-auth"
+            assert receive(client, len(b"synthetic-auth")) == b"synthetic-auth"
             baseline = relay.received
             client.sendall(b"request")
-            assert client.recv(100) == b"synthetic-response"
+            assert receive(client, len(b"synthetic-response")) == b"synthetic-response"
             assert relay.received - baseline == len(b"synthetic-response")
     finally:
         relay.close()
@@ -452,12 +460,38 @@ def test_byte_worker_excludes_connection_auth_and_never_reports_relay_timings(mo
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux watchdog")
-def test_watchdog_censors_and_reaps_a_fresh_worker(monkeypatch):
+def test_watchdog_censors_and_reaps_a_controlled_worker(monkeypatch):
+    import io
+
+    class Controlled:
+        pid = os.getpid()
+        returncode = None
+        polls = 0
+        killed = reaped = False
+        stdin = io.BytesIO()
+
+        def poll(self):
+            self.polls += 1
+            assert self.polls < 5, "watchdog failed to terminate the worker"
+            return self.returncode
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self):
+            assert self.killed
+            self.reaped = True
+            return self.returncode
+
+    child = Controlled()
+    monkeypatch.setattr(driver.subprocess, "Popen", lambda *args, **kwargs: child)
     monkeypatch.setattr(driver, "watchdog_reason", lambda *args: "rss_limit")
     result = driver.run_worker(
         "postgresql://127.0.0.1:1/simex_restore_" + "a" * 32, 36, "default", 1
     )
     assert result == {"status": "rss_limit"}
+    assert child.killed and child.reaped
 
 
 def test_post_exit_peak_budget_is_still_enforced(monkeypatch):

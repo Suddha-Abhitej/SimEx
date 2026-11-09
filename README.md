@@ -521,8 +521,10 @@ connection limits and container memory limits are policies/ceilings, not demonst
   also lose counted events. A one-off load measurement is not continuous instrumentation.
 - **Restore grows with lifetime orders ([#107](https://github.com/Suddha-Abhitej/SimEx/issues/107)).**
   Account loading reads every historical order, and the writer retains orders and idempotency
-  keys. Startup time and memory scale with lifetime order count. No measured failure threshold
-  is known; do not delete history or keys as an unreviewed memory workaround.
+  keys. The default 500 ms load timeout creates a **startup-failure cliff** before memory is
+  exhausted. See the [measured x86 devcontainer brackets and conditions](docs/restore-cost.md);
+  no Oracle ARM64 threshold has been measured. Do not delete history or keys as an unreviewed
+  workaround; historical idempotency must survive recovery.
 - **Gaps pause rather than invent fills.** Resync markers invalidate books until a snapshot;
   lost prints cannot be recovered into maker fills. Receive-age/absolute-lag checks still apply
   during baseline warm-up ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md),
