@@ -1,6 +1,6 @@
 # 0016. Stale-data guard and complete fill timing rules
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-11-09)
 - **Date:** 2026-10-19
 - **Supersedes:** [0005](0005-fills-at-arrival-with-anti-cheat-delay.md), whose rules were
   amended across 0014 and 0015.
@@ -91,3 +91,33 @@ prints can be recovered later. A feed outage can leave resting orders open until
 cancels them, but the always-honoured cancel path avoids trapping an agent. The rolling baseline
 needs ten minutes before it can detect excess lag, so absolute lag and receive-clock age remain
 the early protections.
+
+## Amendment: excess-lag baseline coverage (2026-11-09, #113)
+
+Before this implementation correction, rule 3 was normally inactive at defaults: its warm-up
+compared the span of samples already trimmed to ten minutes against a ten-minute threshold.
+Only an exact receive-time endpoint match could establish the baseline, and it would not latch.
+The earlier overnight baseline run, live gate test and #24 load measurements are **not evidence
+that excess-lag enforcement ran**. Book synchronization/catch-up, receive-clock staleness and
+absolute lag protections continued to apply.
+
+The correction dated 2026-11-09 tracks elapsed coverage from the first usable lag sample,
+independently of the unchanged rolling ten-minute median window. Missing exchange timestamps
+do not start coverage. Coverage and samples survive resyncs and `awaiting_snapshot` periods,
+because lag describes transport delivery rather than book state. A new engine, including after
+a process restart or runtime rebuild, loses both and restarts warm-up; neither is persisted.
+
+Eligibility also requires at least three samples in the current window. Three is the smallest
+odd count whose median has a majority, a structural guard rather than a statistical sufficiency
+claim. One sample yields zero excess; with two, one delayed observation pulls the midpoint and
+can spuriously close the gate. After a long outage, fewer than three current samples temporarily
+disable the excess check without resetting elapsed coverage. Three samples can re-enable it
+within a second; uniformly slow returning samples can then have near-zero excess, while the
+independent absolute-lag and receive-age rules remain in force.
+
+This records the implementation correction date, not a deployment date: existing processes gain
+the safeguard only after deploying the fix and warming up. Operators should watch gate-closure
+rates and expect `simex_exchange_lag_baseline_established` to reach 1 after ten minutes of usable
+coverage with sufficient current samples, visible in the provisioned Grafana exchange dashboard.
+Excess closures retain `feed_lagging:excess_ns=...`. This amendment reports synthetic regression
+validation, not a new live ten-minute measurement or a change to the accepted thresholds.

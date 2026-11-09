@@ -175,6 +175,8 @@ class PairEngine:
         self._last_level2_received_ns: int | None = None
         self._last_lag_ns: int | None = None
         self._lag_samples: list[tuple[int, int]] = []
+        # Coverage outlives the rolling window and book resyncs, but not this engine.
+        self._first_lag_received_ns: int | None = None
         self._catching_up = False
         self.status = MarketStatus(BookState.EMPTY, None, None, None, None, None)
 
@@ -262,6 +264,8 @@ class PairEngine:
             None if update.exchange_ts_ns is None else update.received_at_ns - update.exchange_ts_ns
         )
         if self._last_lag_ns is not None:
+            if self._first_lag_received_ns is None:
+                self._first_lag_received_ns = update.received_at_ns
             self._lag_samples.append((update.received_at_ns, self._last_lag_ns))
             cutoff = update.received_at_ns - LAG_WINDOW_NS
             index = 0
@@ -271,9 +275,12 @@ class PairEngine:
                 del self._lag_samples[:index]
 
     def _publish_status(self) -> None:
+        # Three is the smallest median with a majority: one sample gives zero excess,
+        # and two let one spike pull the midpoint. Sparse windows retain coverage.
         baseline = bool(
-            self._lag_samples
-            and self._lag_samples[-1][0] - self._lag_samples[0][0]
+            len(self._lag_samples) >= 3
+            and self._first_lag_received_ns is not None
+            and self._lag_samples[-1][0] - self._first_lag_received_ns
             >= int(self.settings.lag_baseline_minutes * 60 * SECOND)
         )
         median = None
