@@ -1,6 +1,6 @@
 # 0017. Event-sourced ledger and durable fills
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-11-09: commit-budget measurement)
 - **Date:** 2026-10-19
 - **Amends:** [0014](0014-order-model-and-fill-model.md) for the explicit `_external`
   counterparty.
@@ -149,16 +149,31 @@ Across all 44 ledger calls in the session, including order persistence, the writ
 9.0 ms. Ten reconciliation runs: zero balance mismatches, zero double-entry violations, zero
 timeouts, zero halts.
 
-Each fill therefore blocks the event loop for about 22 ms and each order submission for about
-9 ms, against the 250 ms hold-back: roughly a dozen fills in quick succession would consume the
-whole ordering margin. That is comfortable at the rate a language model trades and is not
-established for any higher rate. The two-core ARM64 target will be slower.
+In this historical run, each fill blocked the event loop for about 22 ms and each order
+submission for about 9 ms, against the 250 ms hold-back: roughly a dozen fills in quick
+succession would consume the whole ordering margin. That is comfortable at the rate a language
+model trades and is not established for any higher rate. These timings do not establish behavior
+on the two-core ARM64 target.
 
-The 50 ms commit p99 budget remains **unverified**. Every per-phase sample was an exact multiple
-of 15.625 ms, the Windows system timer granularity, so sub-50 ms latencies cannot be resolved on
-this host, and a 19 ms mean leaves little headroom for a p99 below the threshold. Re-measure on
-Linux before relying on `ExchangeLedgerCommitP99TooHigh` (#75).
+For this historical Windows run, the 50 ms commit p99 budget was **unverified**. Its timer-limited
+samples cannot validate `ExchangeLedgerCommitP99TooHigh`; see the measurement amendment below
+for the later Linux evidence and its limits.
 
 Lag during this run was negative on all three pairs (level2 p99 of -689, -688 and -682 ms),
 meaning the host clock ran about 0.7 s behind the venue. Fill timing from this session is
 therefore not evidence of honest-fill behaviour (#74).
+
+## Amendment: commit-budget measurement (2026-11-09, #75)
+
+The earlier Windows per-phase samples were exact multiples of the **15.625 ms** system timer
+granularity. They cannot validate the **50 ms commit p99 budget** or
+`ExchangeLedgerCommitP99TooHigh`. The Windows figures above remain historical observations,
+not evidence that the budget was met.
+
+The Linux devcontainer measurement from #24 validates the commit budget for the measured
+**x86 hardware and workload only**. See the **Ledger commit path** row in the
+[README's measured-system-metrics table](../../README.md#measured-system-metrics), together
+with its hardware, workload, date, revisions and sample-resolution conditions. Exact sample p99
+and the alert's interpolated histogram quantile are different measurements; this is not a claim
+that they are equal or a universal capacity guarantee. **No Oracle ARM64 measurement exists.**
+The ledger implementation, commit budget and alert rule are unchanged.
