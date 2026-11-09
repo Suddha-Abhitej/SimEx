@@ -253,3 +253,141 @@ The current harness reports five-second `default`, 500 ms `compatibility`, and 1
 success criterion, set before measuring, is three successful default attempts at 1M lifetime
 orders with 16 live orders. If the posting fold binds earlier, publish that limit and carry it
 into a successor issue; do not conceal it with another timeout increase.
+
+
+## Bounded recovery measurement — 2026-11-09
+
+The criterion was recorded before measurement in ADR 0027 and on #107: three default attempts at
+1M lifetime orders, 16 live orders, within the five-second load budget. **Met.**
+The default loads took **267.618–665.132 ms** (median 273.776 ms), with a maximum observed
+startup worker peak of **41.543 MiB** and **8,971 PostgreSQL response bytes**. All three original
+500 ms compatibility attempts timed out at 1M. The live HTTP capacity rerun was unavailable;
+that limitation is reported separately below.
+This is the **x86 Linux devcontainer on the Ryzen 9 8945HS laptop, not Oracle ARM64**. The shared
+two-core target has less expected headroom; its cutoff remains unmeasured.
+
+Driver/recovery revision: `fa71161da0a6717c333a92d5d822e89c9187b3dd`.
+The [complete aggregate JSON](measurements/bounded-restore-2026-11-09.json) preserves every fresh
+worker result, including the original 500 ms compatibility mode. PostgreSQL is pinned to 16.10
+on a separate Docker instance/volume/port with a 1 GiB memory cap and no container swap. The
+worker cap is 2 GiB, low-memory floor 256 MiB, seed disk budget 64 GiB. Normal Kafka, Postgres,
+Valkey, Prometheus and the editor remained running; no test suite or other benchmark ran during
+the timed sweep. Two insertion-statistics reads checked progress during seeding only. Caches,
+autovacuum and co-load were uncontrolled; this is seeded data, not a cold-cache benchmark.
+CPU/RAM, timer resolution, smallest observed step and software versions are in the JSON.
+
+The same filled-history points and 100k unfilled control as the earlier baseline were used.
+Each order carries 128 bytes of synthetic rationale. Three fresh executable workers run per
+mode, with a separate untimed byte pass. Historical same/different-request probes run after
+timing/RSS and byte capture; no historical object is retained to make the checks pass. Terminal
+histories remain in SQL. Live orders and keys restored are **16 each** at every main point.
+
+Times below are milliseconds. Load is median (min–max) over the three five-second default runs;
+total restore and statement durations are medians. Statement time includes the client round
+trip/decoding, not only server CPU. RSS delta is the process delta, not shallow object size.
+
+| Orders | 500 ms states | 5 s states | Load ms (min–max) | Total restore ms | Live fetch ms | Posting fold ms | RSS delta bytes | Response bytes | Index migration ms |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,000 | ok / ok / ok | ok / ok / ok | 7.183 (6.388–7.365) | 7.452 | 2.228 | 2.287 | 0 | 8,969 | 22.385 |
+| 10,000 | ok / ok / ok | ok / ok / ok | 13.031 (12.776–13.908) | 13.216 | 2.173 | 8.370 | 131,072 | 8,969 | 22.096 |
+| 25,000 | ok / ok / ok | ok / ok / ok | 22.934 (21.277–23.026) | 23.130 | 2.426 | 17.420 | 131,072 | 8,969 | 27.332 |
+| 50,000 | ok / ok / ok | ok / ok / ok | 27.552 (24.436–27.810) | 27.871 | 2.371 | 22.515 | 131,072 | 8,969 | 69.505 |
+| 75,000 | ok / ok / ok | ok / ok / ok | 34.473 (29.843–35.755) | 34.717 | 2.728 | 29.102 | 131,072 | 8,969 | 37.474 |
+| 100,000 | ok / ok / ok | ok / ok / ok | 41.443 (37.469–44.463) | 41.688 | 2.578 | 36.511 | 0 | 8,969 | 37.608 |
+| 1,000,000 | timeout / timeout / timeout | ok / ok / ok | 273.776 (267.618–665.132) | 273.967 | 2.665 | 268.358 | 131,072 | 8,971 | 1147.996 |
+
+Modes ran in order: compatibility, default, diagnostic. At 1M the first default load took
+665.132 ms and the later two took about 268–274 ms. Those later sub-500 ms observations do not
+change the three earlier compatibility timeouts. Cache and co-load effects were uncontrolled;
+this is not an exact or universal 500 ms failure probability/cutoff.
+
+The one-time upgrade was measured after dropping the index and migration-009 marker from the
+synthetic seed, then applying the real transactional migration. Its duration is reported
+separately; it is not part of recovery. The owner prebuild path remains documented above for
+larger/slower deployments. No global migration or ordinary-operation timeout was increased.
+
+All three 120-second diagnostic runs also completed at every point; they do not change any
+default or compatibility verdict. Maximum observed million-order startup peak RSS was **41.543 MiB** in default mode;
+the earlier eager-recovery million-order diagnostics were censored by the 2 GiB cap.
+
+The 100k terminal-unfilled control returned 8902 bytes, restored 16 live orders,
+and passed all three default attempts (load median 6.046 ms;
+posting-fold median 1.622 ms). It has seed postings only. This separates
+the remaining posting work from fetching historical orders; no fitted linear forecast is made.
+
+### Submission-read cost
+
+Each default worker additionally times 100 operations/case after recovery measurements. These
+are writer/read microbenchmarks on seeded, uncontrolled database caches, **not HTTP throughput**.
+The first missing-key query on a fresh connection includes statement preparation; it is not a
+cold-storage test. The table shows the median of three worker medians and the range of their
+nearest-rank sample p99 values, not a pooled p99 or an acceptance ceiling. No writes/admissions
+occur in these replay/miss probes; balances, sequence and retained live counts are checked.
+
+| Million-order case | Samples/worker | Median of medians ms | Worker sample p99 range ms |
+| --- | ---: | ---: | ---: |
+| Indexed unused-key lookup | 100 | 0.560 | 0.711–0.827 |
+| Resident live replay | 100 | 0.003 | 0.009–0.030 |
+| Terminal replay with hydration | 100 | 0.612 | 0.820–1.082 |
+| Historical key conflict | 100 | 0.630 | 0.910–1.029 |
+
+Every genuinely new durable submission pays the indexed lookup before admission. Existing live
+replays avoid it. The 6.969 ms historical commit median is not read latency; the earlier 44–47
+accepted/s figure remains tied to its own workload and conditions. Partial-index maintenance
+also has a write cost. See the separately labelled load-protocol outcome below rather than
+inferring a new capacity figure from this microbenchmark.
+
+### Remaining limits
+
+The order-map problem is removed in durable mode: terminal objects/keys are not recovered or
+accumulated. The posting fold remains history-dependent, live-order memory still scales with
+the active set, and the bounded event journal/caller-held responses consume separate memory.
+There is no claim of constant-time recovery or an Oracle threshold. No-DSN development mode
+still retains its lifetime history because it has no durable source for old keys. A larger
+timeout was not used to turn an observed failing five-second point green.
+
+
+### Rationale and live-set sensitivity
+
+[Separate sensitivity runs](measurements/restore-sensitivity-2026-11-09.json), revision
+`1fbce61a9834f71adcc0ee2e2fc284ae1cd16e2d`, used the same database limits, fresh-worker watchdog,
+three default attempts and untimed byte pass. They followed the main sweep without concurrent
+tests or load. The long rationale is deterministic synthetic ASCII (8,192 characters/bytes),
+not model output or recorded data. The larger live set is a different workload, not a substitute
+for the 16-live-order success criterion.
+
+| Profile | Lifetime / live orders | Rationale bytes/order | Default successes | Load median ms | RSS delta median bytes | Response bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| long_rationale | 1,000 / 16 | 8,192 | 3/3 | 8.096 | 262,144 | 137,993 |
+| many_live | 10,000 / 1,024 | 128 | 3/3 | 21.483 | 3,801,088 | 493,819 |
+
+Live state and its rationale still cost memory and response bytes. These observations do not
+establish an unbounded live-order capacity, a Unicode-text memory bound, or an ARM64 limit.
+Reproduce with the same explicit neutral maintenance DSN environment variable and budgets:
+
+```sh
+python tools/measure_restore_sensitivity.py --maintenance-dsn-env RESTORE_MAINTENANCE \
+  --rss-budget-gib 2 --seed-disk-budget-gib 64 --json /tmp/restore-sensitivity.json
+```
+
+
+### Live load-protocol outcome: unavailable
+
+The unchanged `tools/load_test.py` (#24) protocol was attempted after the recovery/sensitivity
+runs, using a fresh generated `simex_load_107_*` database on the separate instance, its own
+account and ephemeral ports. It could not obtain a fresh book from the normal Kafka source
+within the 20-second readiness window. **No load phase ran and no new HTTP acceptance ceiling
+or commit-latency sample is claimed.** No ingestor was started or gate relaxed to produce a
+number. The generated database was dropped in `finally`; the normal trading ledger was unused.
+
+| Measurement | Current result |
+| --- | --- |
+| Durable HTTP acceptance capacity / change versus 44–47/s | **Unavailable**: no fresh book; the earlier result retains its own conditions |
+| Commit latency versus the earlier 6.969 ms median | **Unavailable** in this attempted live run |
+| Absolute feed lag | **Unavailable**: no completed run and host clock synchronization unverified |
+
+The [attempt metadata](measurements/order-entry-load-2026-11-09.json) records that limitation.
+The measured 0.560 ms unused-key lookup is additional serialized work, not a new throughput
+measurement. Its interaction with partial-index writes and feed processing remains to be
+remeasured with a fresh live feed, under the [existing isolated load protocol](load-test.md).
+Do not infer that throughput is unchanged, or replace the earlier measured table with an estimate.

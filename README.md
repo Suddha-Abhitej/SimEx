@@ -519,12 +519,14 @@ connection limits and container memory limits are policies/ceilings, not demonst
   have **no submission denominator**, so they cannot show an acceptance/refusal fraction for
   unattended operation. They exclude early request-validation refusals; journal eviction can
   also lose counted events. A one-off load measurement is not continuous instrumentation.
-- **Restore grows with lifetime orders ([#107](https://github.com/Suddha-Abhitej/SimEx/issues/107)).**
-  Account loading reads every historical order, and the writer retains orders and idempotency
-  keys. The default 500 ms load timeout creates a **startup-failure cliff** before memory is
-  exhausted. See the [measured x86 devcontainer brackets and conditions](docs/restore-cost.md);
-  no Oracle ARM64 threshold has been measured. Do not delete history or keys as an unreviewed
-  workaround; historical idempotency must survive recovery.
+- **Durable recovery retains live orders only ([#107](https://github.com/Suddha-Abhitej/SimEx/issues/107)).**
+  Historical idempotency is resolved from SQL before admission; terminal objects/keys no longer
+  accumulate in the writer. Recovery has a five-second per-account load budget; ordinary ledger
+  calls remain at 500 ms. Measured on 2026-11-09: 1M orders / 16 live passed 3/3 under the new
+  budget; the separate 500 ms attempts timed out at 1M. The posting fold is still linear. No-DSN mode still
+  retains its lifetime keys. See [the measured limits and migration prebuild instructions](docs/restore-cost.md)
+  and [ADR 0027](docs/adr/0027-live-order-recovery-and-durable-idempotency.md). No Oracle ARM64
+  capacity threshold has been measured; audit history must never be purged as a workaround.
 - **Gaps pause rather than invent fills.** Resync markers invalidate books until a snapshot;
   lost prints cannot be recovered into maker fills. Receive-age/absolute-lag checks still apply
   during baseline warm-up ([ADR 0008](docs/adr/0008-gap-resync-markers-and-gap-records.md),

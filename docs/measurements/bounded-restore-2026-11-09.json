@@ -1,0 +1,2703 @@
+{
+  "schema_version": 2,
+  "complete": true,
+  "host": {
+    "date_utc": "2026-11-09",
+    "platform": "Linux",
+    "machine": "x86_64",
+    "cpu": "AMD Ryzen 9 8945HS w/ Radeon 780M Graphics",
+    "logical_cpus": 16,
+    "memory_total_bytes": 7929524224,
+    "memory_available_bytes": 3762864128,
+    "cgroup_memory_max": "max",
+    "cgroup_cpu_max": "max 100000",
+    "python": "3.12.11",
+    "timer_resolution_ns": "1.000000000",
+    "smallest_observed_step_ns": 40,
+    "driver_commit": "fa71161da0a6717c333a92d5d822e89c9187b3dd",
+    "postgres_version": "16.10 (Debian 16.10-1.pgdg13+1)"
+  },
+  "policy": {
+    "default_timeout_ns": 5000000000,
+    "compatibility_timeout_ns": 500000000,
+    "diagnostic_timeout_seconds": 120,
+    "runs_per_mode": 3,
+    "worker_rss_budget_bytes": 2147483648,
+    "seed_disk_budget_bytes": 68719476736,
+    "active_orders": 16,
+    "criterion_orders": 1000000,
+    "criterion_successes": 3,
+    "rejected_orders": 16,
+    "rationale_bytes": 128,
+    "cache": "seeded; cache uncontrolled; no cache flush"
+  },
+  "points": [
+    {
+      "orders": 1000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 1000,
+        "account_reservations": 16,
+        "fills": 968,
+        "ledger_postings": 4842,
+        "ledger_events": 968,
+        "outbox": 968,
+        "ledger_transactions": 969
+      },
+      "upgrade_ns": 22384946,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 9308870,
+            "load_ns": 9116983,
+            "construct_ns": 191887,
+            "rss_before_bytes": 35450880,
+            "rss_after_bytes": 35581952,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 3161974,
+            "posting_fold_ns": 2954646,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 8706147,
+            "load_ns": 8483222,
+            "construct_ns": 222925,
+            "rss_before_bytes": 35237888,
+            "rss_after_bytes": 35237888,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 3440625,
+            "posting_fold_ns": 2564560,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 8479916,
+            "load_ns": 8142271,
+            "construct_ns": 337645,
+            "rss_before_bytes": 35131392,
+            "rss_after_bytes": 35131392,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2717133,
+            "posting_fold_ns": 2705891,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 8479916,
+          "median": 8706147,
+          "max": 9308870
+        },
+        "load_ns": {
+          "min": 8142271,
+          "median": 8483222,
+          "max": 9116983
+        },
+        "construct_ns": {
+          "min": 191887,
+          "median": 222925,
+          "max": 337645
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 40214528,
+          "median": 40214528,
+          "max": 40214528
+        }
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 6628528,
+            "load_ns": 6388158,
+            "construct_ns": 240370,
+            "rss_before_bytes": 35622912,
+            "rss_after_bytes": 35622912,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2003768,
+            "posting_fold_ns": 2063564,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1521527,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 546855,
+            "lookup_miss_p99_ns": 832821,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3521,
+            "lookup_live_p99_ns": 8787,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 561843,
+            "lookup_terminal_p99_ns": 824035,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 593374,
+            "lookup_conflict_p99_ns": 1477704,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 7598470,
+            "load_ns": 7364863,
+            "construct_ns": 233607,
+            "rss_before_bytes": 35352576,
+            "rss_after_bytes": 35483648,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2663249,
+            "posting_fold_ns": 2286569,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1637639,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 530679,
+            "lookup_miss_p99_ns": 802785,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3291,
+            "lookup_live_p99_ns": 15640,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 597401,
+            "lookup_terminal_p99_ns": 1094594,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 606423,
+            "lookup_conflict_p99_ns": 1002366,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 7452099,
+            "load_ns": 7183125,
+            "construct_ns": 268974,
+            "rss_before_bytes": 35504128,
+            "rss_after_bytes": 35504128,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2227555,
+            "posting_fold_ns": 2586623,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1502971,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 549049,
+            "lookup_miss_p99_ns": 935377,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3176,
+            "lookup_live_p99_ns": 9489,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 594395,
+            "lookup_terminal_p99_ns": 892445,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 566212,
+            "lookup_conflict_p99_ns": 854161,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 6628528,
+          "median": 7452099,
+          "max": 7598470
+        },
+        "load_ns": {
+          "min": 6388158,
+          "median": 7183125,
+          "max": 7364863
+        },
+        "construct_ns": {
+          "min": 233607,
+          "median": 240370,
+          "max": 268974
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 40214528,
+          "median": 40214528,
+          "max": 40214528
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 7596963,
+            "load_ns": 7322449,
+            "construct_ns": 274514,
+            "rss_before_bytes": 35405824,
+            "rss_after_bytes": 35667968,
+            "rss_delta_bytes": 262144,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2929898,
+            "posting_fold_ns": 1805299,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 7949759,
+            "load_ns": 7553001,
+            "construct_ns": 396758,
+            "rss_before_bytes": 35037184,
+            "rss_after_bytes": 35168256,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2557868,
+            "posting_fold_ns": 2186086,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 7361465,
+            "load_ns": 7175470,
+            "construct_ns": 185995,
+            "rss_before_bytes": 35565568,
+            "rss_after_bytes": 35565568,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 40214528,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 969,
+            "active_fetch_ns": 2343087,
+            "posting_fold_ns": 2336585,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 7361465,
+          "median": 7596963,
+          "max": 7949759
+        },
+        "load_ns": {
+          "min": 7175470,
+          "median": 7322449,
+          "max": 7553001
+        },
+        "construct_ns": {
+          "min": 185995,
+          "median": 274514,
+          "max": 396758
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 262144
+        },
+        "peak_rss_bytes": {
+          "min": 40214528,
+          "median": 40214528,
+          "max": 40214528
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8969,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      }
+    },
+    {
+      "orders": 10000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 10000,
+        "account_reservations": 16,
+        "fills": 9968,
+        "ledger_postings": 49842,
+        "ledger_events": 9968,
+        "outbox": 9968,
+        "ledger_transactions": 9969
+      },
+      "upgrade_ns": 22096064,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 14036758,
+            "load_ns": 13742716,
+            "construct_ns": 294042,
+            "rss_before_bytes": 35102720,
+            "rss_after_bytes": 35233792,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2954014,
+            "posting_fold_ns": 8316710,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 14944356,
+            "load_ns": 14742099,
+            "construct_ns": 202257,
+            "rss_before_bytes": 35049472,
+            "rss_after_bytes": 35049472,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2606287,
+            "posting_fold_ns": 9598757,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 13046745,
+            "load_ns": 12860949,
+            "construct_ns": 185796,
+            "rss_before_bytes": 35213312,
+            "rss_after_bytes": 35344384,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2459527,
+            "posting_fold_ns": 7914795,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 13046745,
+          "median": 14036758,
+          "max": 14944356
+        },
+        "load_ns": {
+          "min": 12860949,
+          "median": 13742716,
+          "max": 14742099
+        },
+        "construct_ns": {
+          "min": 185796,
+          "median": 202257,
+          "max": 294042
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41377792,
+          "median": 41377792,
+          "max": 41377792
+        }
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 13215548,
+            "load_ns": 13031336,
+            "construct_ns": 184212,
+            "rss_before_bytes": 35336192,
+            "rss_after_bytes": 35467264,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2012731,
+            "posting_fold_ns": 8416488,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1619519,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 537769,
+            "lookup_miss_p99_ns": 811132,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3206,
+            "lookup_live_p99_ns": 11081,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 593916,
+            "lookup_terminal_p99_ns": 998901,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 605253,
+            "lookup_conflict_p99_ns": 882869,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 14207444,
+            "load_ns": 13908262,
+            "construct_ns": 299182,
+            "rss_before_bytes": 35110912,
+            "rss_after_bytes": 35241984,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2341147,
+            "posting_fold_ns": 8369723,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1397521,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 537197,
+            "lookup_miss_p99_ns": 853606,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3196,
+            "lookup_live_p99_ns": 9087,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 607652,
+            "lookup_terminal_p99_ns": 935450,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 607051,
+            "lookup_conflict_p99_ns": 876347,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 13204997,
+            "load_ns": 12776046,
+            "construct_ns": 428951,
+            "rss_before_bytes": 35405824,
+            "rss_after_bytes": 35405824,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2172907,
+            "posting_fold_ns": 8106581,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1609068,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 553704,
+            "lookup_miss_p99_ns": 805551,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3166,
+            "lookup_live_p99_ns": 112996,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 606069,
+            "lookup_terminal_p99_ns": 878163,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 602578,
+            "lookup_conflict_p99_ns": 889925,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 13204997,
+          "median": 13215548,
+          "max": 14207444
+        },
+        "load_ns": {
+          "min": 12776046,
+          "median": 13031336,
+          "max": 13908262
+        },
+        "construct_ns": {
+          "min": 184212,
+          "median": 299182,
+          "max": 428951
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41377792,
+          "median": 41377792,
+          "max": 41377792
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 15020942,
+            "load_ns": 14735125,
+            "construct_ns": 285817,
+            "rss_before_bytes": 35217408,
+            "rss_after_bytes": 35348480,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2652553,
+            "posting_fold_ns": 9484858,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 13119503,
+            "load_ns": 12836451,
+            "construct_ns": 283052,
+            "rss_before_bytes": 35336192,
+            "rss_after_bytes": 35467264,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 2473712,
+            "posting_fold_ns": 7839651,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 13658545,
+            "load_ns": 13473622,
+            "construct_ns": 184923,
+            "rss_before_bytes": 35590144,
+            "rss_after_bytes": 35590144,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41377792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 9969,
+            "active_fetch_ns": 1932898,
+            "posting_fold_ns": 8978320,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 13119503,
+          "median": 13658545,
+          "max": 15020942
+        },
+        "load_ns": {
+          "min": 12836451,
+          "median": 13473622,
+          "max": 14735125
+        },
+        "construct_ns": {
+          "min": 184923,
+          "median": 283052,
+          "max": 285817
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41377792,
+          "median": 41377792,
+          "max": 41377792
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8969,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 9969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      },
+      "marginal": {
+        "restore_ns_per_order": "673.5091111111111111111111111",
+        "load_ns_per_order": "683.4636666666666666666666667",
+        "rss_delta_bytes_per_order": "0",
+        "response_bytes_per_order": "0"
+      }
+    },
+    {
+      "orders": 25000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 25000,
+        "account_reservations": 16,
+        "fills": 24968,
+        "ledger_postings": 124842,
+        "ledger_events": 24968,
+        "outbox": 24968,
+        "ledger_transactions": 24969
+      },
+      "upgrade_ns": 27332452,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 23983284,
+            "load_ns": 23695733,
+            "construct_ns": 287551,
+            "rss_before_bytes": 35225600,
+            "rss_after_bytes": 35225600,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2422075,
+            "posting_fold_ns": 18555941,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 21705415,
+            "load_ns": 21311473,
+            "construct_ns": 393942,
+            "rss_before_bytes": 35303424,
+            "rss_after_bytes": 35303424,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 1999770,
+            "posting_fold_ns": 16847776,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 23999488,
+            "load_ns": 23720616,
+            "construct_ns": 278872,
+            "rss_before_bytes": 35430400,
+            "rss_after_bytes": 35561472,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2152422,
+            "posting_fold_ns": 18875278,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 21705415,
+          "median": 23983284,
+          "max": 23999488
+        },
+        "load_ns": {
+          "min": 21311473,
+          "median": 23695733,
+          "max": 23720616
+        },
+        "construct_ns": {
+          "min": 278872,
+          "median": 287551,
+          "max": 393942
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41512960,
+          "median": 41512960,
+          "max": 41512960
+        }
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 23129505,
+            "load_ns": 22933973,
+            "construct_ns": 195532,
+            "rss_before_bytes": 35528704,
+            "rss_after_bytes": 35659776,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2425804,
+            "posting_fold_ns": 17967494,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1559920,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 511245,
+            "lookup_miss_p99_ns": 741947,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3146,
+            "lookup_live_p99_ns": 20189,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 607574,
+            "lookup_terminal_p99_ns": 811972,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 645752,
+            "lookup_conflict_p99_ns": 931289,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 21472169,
+            "load_ns": 21276647,
+            "construct_ns": 195522,
+            "rss_before_bytes": 35307520,
+            "rss_after_bytes": 35307520,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2216494,
+            "posting_fold_ns": 16867402,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1797621,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 521386,
+            "lookup_miss_p99_ns": 732759,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3166,
+            "lookup_live_p99_ns": 8987,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 591815,
+            "lookup_terminal_p99_ns": 797383,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 614223,
+            "lookup_conflict_p99_ns": 791913,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 23228015,
+            "load_ns": 23026028,
+            "construct_ns": 201987,
+            "rss_before_bytes": 34856960,
+            "rss_after_bytes": 34988032,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2723643,
+            "posting_fold_ns": 17420450,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1521526,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 528139,
+            "lookup_miss_p99_ns": 841988,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3261,
+            "lookup_live_p99_ns": 8897,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 598448,
+            "lookup_terminal_p99_ns": 841517,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 621693,
+            "lookup_conflict_p99_ns": 899428,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 21472169,
+          "median": 23129505,
+          "max": 23228015
+        },
+        "load_ns": {
+          "min": 21276647,
+          "median": 22933973,
+          "max": 23026028
+        },
+        "construct_ns": {
+          "min": 195522,
+          "median": 195532,
+          "max": 201987
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41512960,
+          "median": 41512960,
+          "max": 41512960
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 24084468,
+            "load_ns": 23788463,
+            "construct_ns": 296005,
+            "rss_before_bytes": 34967552,
+            "rss_after_bytes": 34967552,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2091386,
+            "posting_fold_ns": 18945731,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 23478510,
+            "load_ns": 23290721,
+            "construct_ns": 187789,
+            "rss_before_bytes": 35504128,
+            "rss_after_bytes": 35635200,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 2051018,
+            "posting_fold_ns": 18737844,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 22321583,
+            "load_ns": 22076735,
+            "construct_ns": 244848,
+            "rss_before_bytes": 35000320,
+            "rss_after_bytes": 35131392,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41512960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 24969,
+            "active_fetch_ns": 1922182,
+            "posting_fold_ns": 17814542,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 22321583,
+          "median": 23478510,
+          "max": 24084468
+        },
+        "load_ns": {
+          "min": 22076735,
+          "median": 23290721,
+          "max": 23788463
+        },
+        "construct_ns": {
+          "min": 187789,
+          "median": 244848,
+          "max": 296005
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41512960,
+          "median": 41512960,
+          "max": 41512960
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8969,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 24969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      },
+      "marginal": {
+        "restore_ns_per_order": "654.6643333333333333333333333",
+        "load_ns_per_order": "654.4732666666666666666666667",
+        "rss_delta_bytes_per_order": "0",
+        "response_bytes_per_order": "0"
+      }
+    },
+    {
+      "orders": 50000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 50000,
+        "account_reservations": 16,
+        "fills": 49968,
+        "ledger_postings": 249842,
+        "ledger_events": 49968,
+        "outbox": 49968,
+        "ledger_transactions": 49969
+      },
+      "upgrade_ns": 69505274,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 42336219,
+            "load_ns": 41983995,
+            "construct_ns": 352224,
+            "rss_before_bytes": 34988032,
+            "rss_after_bytes": 35119104,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41746432,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 3407362,
+            "posting_fold_ns": 35915045,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 26030516,
+            "load_ns": 25836915,
+            "construct_ns": 193601,
+            "rss_before_bytes": 34869248,
+            "rss_after_bytes": 35000320,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41746432,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2439376,
+            "posting_fold_ns": 20708574,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 27158613,
+            "load_ns": 26961857,
+            "construct_ns": 196756,
+            "rss_before_bytes": 35368960,
+            "rss_after_bytes": 35500032,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41746432,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2168137,
+            "posting_fold_ns": 22392176,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 26030516,
+          "median": 27158613,
+          "max": 42336219
+        },
+        "load_ns": {
+          "min": 25836915,
+          "median": 26961857,
+          "max": 41983995
+        },
+        "construct_ns": {
+          "min": 193601,
+          "median": 196756,
+          "max": 352224
+        },
+        "rss_delta_bytes": {
+          "min": 131072,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 41746432,
+          "median": 41746432,
+          "max": 41746432
+        }
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 28022729,
+            "load_ns": 27809952,
+            "construct_ns": 212777,
+            "rss_before_bytes": 35045376,
+            "rss_after_bytes": 35176448,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 41746432,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2371105,
+            "posting_fold_ns": 22514983,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1337539,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 526452,
+            "lookup_miss_p99_ns": 826331,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3206,
+            "lookup_live_p99_ns": 17954,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 594853,
+            "lookup_terminal_p99_ns": 972220,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 617060,
+            "lookup_conflict_p99_ns": 878170,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 24722296,
+            "load_ns": 24436228,
+            "construct_ns": 286068,
+            "rss_before_bytes": 35553280,
+            "rss_after_bytes": 35553280,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42401792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 1966764,
+            "posting_fold_ns": 20122144,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1541619,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 516954,
+            "lookup_miss_p99_ns": 750235,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3191,
+            "lookup_live_p99_ns": 13606,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 601200,
+            "lookup_terminal_p99_ns": 809509,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 613098,
+            "lookup_conflict_p99_ns": 910663,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 27871148,
+            "load_ns": 27552219,
+            "construct_ns": 318929,
+            "rss_before_bytes": 35389440,
+            "rss_after_bytes": 35651584,
+            "rss_delta_bytes": 262144,
+            "peak_rss_bytes": 42401792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2707670,
+            "posting_fold_ns": 22577241,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1499909,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 558028,
+            "lookup_miss_p99_ns": 748917,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3366,
+            "lookup_live_p99_ns": 8837,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 636898,
+            "lookup_terminal_p99_ns": 946371,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 590820,
+            "lookup_conflict_p99_ns": 1129641,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 24722296,
+          "median": 27871148,
+          "max": 28022729
+        },
+        "load_ns": {
+          "min": 24436228,
+          "median": 27552219,
+          "max": 27809952
+        },
+        "construct_ns": {
+          "min": 212777,
+          "median": 286068,
+          "max": 318929
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 262144
+        },
+        "peak_rss_bytes": {
+          "min": 41746432,
+          "median": 42401792,
+          "max": 42401792
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 23915722,
+            "load_ns": 23731920,
+            "construct_ns": 183802,
+            "rss_before_bytes": 35356672,
+            "rss_after_bytes": 35356672,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42401792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2047868,
+            "posting_fold_ns": 19482631,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 27924701,
+            "load_ns": 27743825,
+            "construct_ns": 180876,
+            "rss_before_bytes": 35229696,
+            "rss_after_bytes": 35360768,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 42401792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2557623,
+            "posting_fold_ns": 22631896,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 25441712,
+            "load_ns": 25147368,
+            "construct_ns": 294344,
+            "rss_before_bytes": 35332096,
+            "rss_after_bytes": 35332096,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42401792,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 49969,
+            "active_fetch_ns": 2159224,
+            "posting_fold_ns": 20457225,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 23915722,
+          "median": 25441712,
+          "max": 27924701
+        },
+        "load_ns": {
+          "min": 23731920,
+          "median": 25147368,
+          "max": 27743825
+        },
+        "construct_ns": {
+          "min": 180876,
+          "median": 183802,
+          "max": 294344
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 42401792,
+          "median": 42401792,
+          "max": 42401792
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8969,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 49969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      },
+      "marginal": {
+        "restore_ns_per_order": "78.52808",
+        "load_ns_per_order": "74.26588",
+        "rss_delta_bytes_per_order": "-5.24288",
+        "response_bytes_per_order": "0"
+      }
+    },
+    {
+      "orders": 75000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 75000,
+        "account_reservations": 16,
+        "fills": 74968,
+        "ledger_postings": 374842,
+        "ledger_events": 74968,
+        "outbox": 74968,
+        "ledger_transactions": 74969
+      },
+      "upgrade_ns": 37474417,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 33045801,
+            "load_ns": 32850518,
+            "construct_ns": 195283,
+            "rss_before_bytes": 35336192,
+            "rss_after_bytes": 35467264,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2615917,
+            "posting_fold_ns": 27908048,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 34034744,
+            "load_ns": 33709591,
+            "construct_ns": 325153,
+            "rss_before_bytes": 35340288,
+            "rss_after_bytes": 35602432,
+            "rss_delta_bytes": 262144,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2167388,
+            "posting_fold_ns": 28769838,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 31341468,
+            "load_ns": 31124152,
+            "construct_ns": 217316,
+            "rss_before_bytes": 35377152,
+            "rss_after_bytes": 35377152,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2572322,
+            "posting_fold_ns": 25935393,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 31341468,
+          "median": 33045801,
+          "max": 34034744
+        },
+        "load_ns": {
+          "min": 31124152,
+          "median": 32850518,
+          "max": 33709591
+        },
+        "construct_ns": {
+          "min": 195283,
+          "median": 217316,
+          "max": 325153
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 262144
+        },
+        "peak_rss_bytes": {
+          "min": 42610688,
+          "median": 42610688,
+          "max": 42610688
+        }
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 30048906,
+            "load_ns": 29843252,
+            "construct_ns": 205654,
+            "rss_before_bytes": 35540992,
+            "rss_after_bytes": 35934208,
+            "rss_delta_bytes": 393216,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2728411,
+            "posting_fold_ns": 24203760,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1718258,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 562180,
+            "lookup_miss_p99_ns": 775314,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3151,
+            "lookup_live_p99_ns": 8907,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 588155,
+            "lookup_terminal_p99_ns": 1283907,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 602487,
+            "lookup_conflict_p99_ns": 777288,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 34717431,
+            "load_ns": 34472602,
+            "construct_ns": 244829,
+            "rss_before_bytes": 35241984,
+            "rss_after_bytes": 35373056,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2563656,
+            "posting_fold_ns": 29251500,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1525058,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 557206,
+            "lookup_miss_p99_ns": 847322,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3282,
+            "lookup_live_p99_ns": 10760,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 670146,
+            "lookup_terminal_p99_ns": 1543704,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 688813,
+            "lookup_conflict_p99_ns": 1120875,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 35944258,
+            "load_ns": 35755387,
+            "construct_ns": 188871,
+            "rss_before_bytes": 34926592,
+            "rss_after_bytes": 34926592,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 3978826,
+            "posting_fold_ns": 29101772,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1382806,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 561098,
+            "lookup_miss_p99_ns": 791705,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3246,
+            "lookup_live_p99_ns": 51138,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 603810,
+            "lookup_terminal_p99_ns": 900814,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 598269,
+            "lookup_conflict_p99_ns": 827524,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 30048906,
+          "median": 34717431,
+          "max": 35944258
+        },
+        "load_ns": {
+          "min": 29843252,
+          "median": 34472602,
+          "max": 35755387
+        },
+        "construct_ns": {
+          "min": 188871,
+          "median": 205654,
+          "max": 244829
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 393216
+        },
+        "peak_rss_bytes": {
+          "min": 42610688,
+          "median": 42610688,
+          "max": 42610688
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 31329314,
+            "load_ns": 31047184,
+            "construct_ns": 282130,
+            "rss_before_bytes": 35184640,
+            "rss_after_bytes": 35184640,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2333036,
+            "posting_fold_ns": 26041176,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 35869230,
+            "load_ns": 35671092,
+            "construct_ns": 198138,
+            "rss_before_bytes": 35131392,
+            "rss_after_bytes": 35262464,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2942921,
+            "posting_fold_ns": 30221083,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 31543363,
+            "load_ns": 31351797,
+            "construct_ns": 191566,
+            "rss_before_bytes": 35213312,
+            "rss_after_bytes": 35213312,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 42610688,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 74969,
+            "active_fetch_ns": 2236579,
+            "posting_fold_ns": 26414641,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 31329314,
+          "median": 31543363,
+          "max": 35869230
+        },
+        "load_ns": {
+          "min": 31047184,
+          "median": 31351797,
+          "max": 35671092
+        },
+        "construct_ns": {
+          "min": 191566,
+          "median": 198138,
+          "max": 282130
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 42610688,
+          "median": 42610688,
+          "max": 42610688
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8969,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 74969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      },
+      "marginal": {
+        "restore_ns_per_order": "244.06604",
+        "load_ns_per_order": "248.17716",
+        "rss_delta_bytes_per_order": "0",
+        "response_bytes_per_order": "0"
+      }
+    },
+    {
+      "orders": 100000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 100000,
+        "account_reservations": 16,
+        "fills": 99968,
+        "ledger_postings": 499842,
+        "ledger_events": 99968,
+        "outbox": 99968,
+        "ledger_transactions": 99969
+      },
+      "upgrade_ns": 37608490,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 38312161,
+            "load_ns": 38097278,
+            "construct_ns": 214883,
+            "rss_before_bytes": 35409920,
+            "rss_after_bytes": 35540992,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2765735,
+            "posting_fold_ns": 32820206,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 38913304,
+            "load_ns": 38723100,
+            "construct_ns": 190204,
+            "rss_before_bytes": 35405824,
+            "rss_after_bytes": 35536896,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 3430229,
+            "posting_fold_ns": 32143930,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 35812687,
+            "load_ns": 35628984,
+            "construct_ns": 183703,
+            "rss_before_bytes": 35557376,
+            "rss_after_bytes": 35557376,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2109396,
+            "posting_fold_ns": 31135143,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 35812687,
+          "median": 38312161,
+          "max": 38913304
+        },
+        "load_ns": {
+          "min": 35628984,
+          "median": 38097278,
+          "max": 38723100
+        },
+        "construct_ns": {
+          "min": 183703,
+          "median": 190204,
+          "max": 214883
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 43016192,
+          "median": 43016192,
+          "max": 43016192
+        }
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 37712401,
+            "load_ns": 37469375,
+            "construct_ns": 243026,
+            "rss_before_bytes": 35323904,
+            "rss_after_bytes": 35323904,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2578406,
+            "posting_fold_ns": 32680849,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1721151,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 529254,
+            "lookup_miss_p99_ns": 868896,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3266,
+            "lookup_live_p99_ns": 22273,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 572581,
+            "lookup_terminal_p99_ns": 890003,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 598560,
+            "lookup_conflict_p99_ns": 807615,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 41688089,
+            "load_ns": 41442529,
+            "construct_ns": 245560,
+            "rss_before_bytes": 35524608,
+            "rss_after_bytes": 35524608,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2448305,
+            "posting_fold_ns": 36510673,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1711004,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 580372,
+            "lookup_miss_p99_ns": 1053065,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3577,
+            "lookup_live_p99_ns": 10430,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 625125,
+            "lookup_terminal_p99_ns": 1093812,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 610429,
+            "lookup_conflict_p99_ns": 1025873,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 44683816,
+            "load_ns": 44463205,
+            "construct_ns": 220611,
+            "rss_before_bytes": 34504704,
+            "rss_after_bytes": 34504704,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2686319,
+            "posting_fold_ns": 39040242,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1661983,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 573188,
+            "lookup_miss_p99_ns": 847284,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 5866,
+            "lookup_live_p99_ns": 41580,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 637850,
+            "lookup_terminal_p99_ns": 998199,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 637889,
+            "lookup_conflict_p99_ns": 1162471,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 37712401,
+          "median": 41688089,
+          "max": 44683816
+        },
+        "load_ns": {
+          "min": 37469375,
+          "median": 41442529,
+          "max": 44463205
+        },
+        "construct_ns": {
+          "min": 220611,
+          "median": 243026,
+          "max": 245560
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 0
+        },
+        "peak_rss_bytes": {
+          "min": 43016192,
+          "median": 43016192,
+          "max": 43016192
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 44116735,
+            "load_ns": 43818825,
+            "construct_ns": 297910,
+            "rss_before_bytes": 35385344,
+            "rss_after_bytes": 35385344,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2439458,
+            "posting_fold_ns": 38735029,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 38466795,
+            "load_ns": 38273425,
+            "construct_ns": 193370,
+            "rss_before_bytes": 35250176,
+            "rss_after_bytes": 35381248,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2981728,
+            "posting_fold_ns": 32717212,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 39640451,
+            "load_ns": 39298286,
+            "construct_ns": 342165,
+            "rss_before_bytes": 35594240,
+            "rss_after_bytes": 35594240,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43016192,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 99969,
+            "active_fetch_ns": 2936528,
+            "posting_fold_ns": 33333625,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 38466795,
+          "median": 39640451,
+          "max": 44116735
+        },
+        "load_ns": {
+          "min": 38273425,
+          "median": 39298286,
+          "max": 43818825
+        },
+        "construct_ns": {
+          "min": 193370,
+          "median": 297910,
+          "max": 342165
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 0,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 43016192,
+          "median": 43016192,
+          "max": 43016192
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8969,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 99969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      },
+      "marginal": {
+        "restore_ns_per_order": "323.88352",
+        "load_ns_per_order": "317.85956",
+        "rss_delta_bytes_per_order": "0",
+        "response_bytes_per_order": "0"
+      }
+    },
+    {
+      "orders": 1000000,
+      "profile": "filled",
+      "seed_counts": {
+        "orders": 1000000,
+        "account_reservations": 16,
+        "fills": 999968,
+        "ledger_postings": 4999842,
+        "ledger_events": 999968,
+        "outbox": 999968,
+        "ledger_transactions": 999969
+      },
+      "upgrade_ns": 1147995523,
+      "upgrade_within_startup_budget": true,
+      "compatibility": {
+        "successes": 0,
+        "runs": [
+          {
+            "status": "timeout",
+            "restore_ns": 512161021,
+            "load_ns": 512151423,
+            "construct_ns": null,
+            "rss_before_bytes": 35201024,
+            "rss_after_bytes": 35201024,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43560960,
+            "active_fetch_ns": 3025361,
+            "posting_fold_ns": 495798976,
+            "restored_orders": 0,
+            "restored_keys": 0
+          },
+          {
+            "status": "timeout",
+            "restore_ns": 514916093,
+            "load_ns": 514907557,
+            "construct_ns": null,
+            "rss_before_bytes": 35082240,
+            "rss_after_bytes": 35213312,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43560960,
+            "active_fetch_ns": 2818456,
+            "posting_fold_ns": 495875414,
+            "restored_orders": 0,
+            "restored_keys": 0
+          },
+          {
+            "status": "timeout",
+            "restore_ns": 509964320,
+            "load_ns": 509956686,
+            "construct_ns": null,
+            "rss_before_bytes": 35835904,
+            "rss_after_bytes": 35835904,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43560960,
+            "active_fetch_ns": 2787861,
+            "posting_fold_ns": 495955314,
+            "restored_orders": 0,
+            "restored_keys": 0
+          }
+        ],
+        "restore_ns": null,
+        "load_ns": null,
+        "construct_ns": null,
+        "rss_delta_bytes": null,
+        "peak_rss_bytes": null
+      },
+      "default": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 665345635,
+            "load_ns": 665131896,
+            "construct_ns": 213739,
+            "rss_before_bytes": 35110912,
+            "rss_after_bytes": 35110912,
+            "rss_delta_bytes": 0,
+            "peak_rss_bytes": 43560960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 999969,
+            "active_fetch_ns": 3307513,
+            "posting_fold_ns": 659123960,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 2543312,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 560316,
+            "lookup_miss_p99_ns": 826801,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3166,
+            "lookup_live_p99_ns": 9007,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 618112,
+            "lookup_terminal_p99_ns": 1082029,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 620431,
+            "lookup_conflict_p99_ns": 909630,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 273967015,
+            "load_ns": 273775789,
+            "construct_ns": 191226,
+            "rss_before_bytes": 35143680,
+            "rss_after_bytes": 35274752,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43560960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 999969,
+            "active_fetch_ns": 2664845,
+            "posting_fold_ns": 268357812,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1377935,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 528044,
+            "lookup_miss_p99_ns": 763700,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3251,
+            "lookup_live_p99_ns": 29797,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 573080,
+            "lookup_terminal_p99_ns": 820449,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 630204,
+            "lookup_conflict_p99_ns": 1028556,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 267811818,
+            "load_ns": 267617817,
+            "construct_ns": 194001,
+            "rss_before_bytes": 34951168,
+            "rss_after_bytes": 35082240,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43560960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 999969,
+            "active_fetch_ns": 2650587,
+            "posting_fold_ns": 262597680,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "lookup_benchmark_ok": 1,
+            "lookup_first_miss_ns": 1224772,
+            "lookup_miss_count": 100,
+            "lookup_miss_median_ns": 565185,
+            "lookup_miss_p99_ns": 710819,
+            "lookup_live_count": 100,
+            "lookup_live_median_ns": 3136,
+            "lookup_live_p99_ns": 15259,
+            "lookup_terminal_count": 100,
+            "lookup_terminal_median_ns": 611694,
+            "lookup_terminal_p99_ns": 917193,
+            "lookup_conflict_count": 100,
+            "lookup_conflict_median_ns": 634453,
+            "lookup_conflict_p99_ns": 993526,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 267811818,
+          "median": 273967015,
+          "max": 665345635
+        },
+        "load_ns": {
+          "min": 267617817,
+          "median": 273775789,
+          "max": 665131896
+        },
+        "construct_ns": {
+          "min": 191226,
+          "median": 194001,
+          "max": 213739
+        },
+        "rss_delta_bytes": {
+          "min": 0,
+          "median": 131072,
+          "max": 131072
+        },
+        "peak_rss_bytes": {
+          "min": 43560960,
+          "median": 43560960,
+          "max": 43560960
+        }
+      },
+      "diagnostic": {
+        "successes": 3,
+        "runs": [
+          {
+            "status": "ok",
+            "restore_ns": 269726438,
+            "load_ns": 269484986,
+            "construct_ns": 241452,
+            "rss_before_bytes": 35438592,
+            "rss_after_bytes": 35569664,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43560960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 999969,
+            "active_fetch_ns": 2251504,
+            "posting_fold_ns": 264619144,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 270113013,
+            "load_ns": 269866571,
+            "construct_ns": 246442,
+            "rss_before_bytes": 35282944,
+            "rss_after_bytes": 35545088,
+            "rss_delta_bytes": 262144,
+            "peak_rss_bytes": 43560960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 999969,
+            "active_fetch_ns": 2607296,
+            "posting_fold_ns": 264945742,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          },
+          {
+            "status": "ok",
+            "restore_ns": 282866618,
+            "load_ns": 282402501,
+            "construct_ns": 464117,
+            "rss_before_bytes": 34832384,
+            "rss_after_bytes": 34963456,
+            "rss_delta_bytes": 131072,
+            "peak_rss_bytes": 43560960,
+            "orders_rows": 16,
+            "reservations_rows": 16,
+            "balances_rows": 2,
+            "latest_sequence": 999969,
+            "active_fetch_ns": 3009745,
+            "posting_fold_ns": 276571502,
+            "restored_orders": 16,
+            "restored_keys": 16,
+            "checked_keys": 3
+          }
+        ],
+        "restore_ns": {
+          "min": 269726438,
+          "median": 270113013,
+          "max": 282866618
+        },
+        "load_ns": {
+          "min": 269484986,
+          "median": 269866571,
+          "max": 282402501
+        },
+        "construct_ns": {
+          "min": 241452,
+          "median": 246442,
+          "max": 464117
+        },
+        "rss_delta_bytes": {
+          "min": 131072,
+          "median": 131072,
+          "max": 262144
+        },
+        "peak_rss_bytes": {
+          "min": 43560960,
+          "median": 43560960,
+          "max": 43560960
+        }
+      },
+      "bytes": {
+        "status": "ok",
+        "response_bytes": 8971,
+        "orders_rows": 16,
+        "reservations_rows": 16,
+        "balances_rows": 2,
+        "latest_sequence": 999969,
+        "restored_orders": 16,
+        "restored_keys": 16,
+        "checked_keys": 3
+      },
+      "marginal": {
+        "restore_ns_per_order": "256.0806244444444444444444444",
+        "load_ns_per_order": "256.1869833333333333333333333",
+        "rss_delta_bytes_per_order": "0.1456355555555555555555555556",
+        "response_bytes_per_order": "0.000002222222222222222222222222222"
+      }
+    }
+  ],
+  "unfilled_comparison": {
+    "orders": 100000,
+    "profile": "unfilled",
+    "seed_counts": {
+      "orders": 100000,
+      "account_reservations": 16,
+      "fills": 0,
+      "ledger_postings": 2,
+      "ledger_events": 0,
+      "outbox": 0,
+      "ledger_transactions": 1
+    },
+    "upgrade_ns": 37749068,
+    "upgrade_within_startup_budget": true,
+    "compatibility": {
+      "successes": 3,
+      "runs": [
+        {
+          "status": "ok",
+          "restore_ns": 6783609,
+          "load_ns": 6603003,
+          "construct_ns": 180606,
+          "rss_before_bytes": 35069952,
+          "rss_after_bytes": 35069952,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2799352,
+          "posting_fold_ns": 1504206,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "checked_keys": 3
+        },
+        {
+          "status": "ok",
+          "restore_ns": 6867880,
+          "load_ns": 6681394,
+          "construct_ns": 186486,
+          "rss_before_bytes": 35164160,
+          "rss_after_bytes": 35164160,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2527472,
+          "posting_fold_ns": 1685112,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "checked_keys": 3
+        },
+        {
+          "status": "ok",
+          "restore_ns": 6396188,
+          "load_ns": 6216965,
+          "construct_ns": 179223,
+          "rss_before_bytes": 35573760,
+          "rss_after_bytes": 35573760,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2366825,
+          "posting_fold_ns": 1169516,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "checked_keys": 3
+        }
+      ],
+      "restore_ns": {
+        "min": 6396188,
+        "median": 6783609,
+        "max": 6867880
+      },
+      "load_ns": {
+        "min": 6216965,
+        "median": 6603003,
+        "max": 6681394
+      },
+      "construct_ns": {
+        "min": 179223,
+        "median": 180606,
+        "max": 186486
+      },
+      "rss_delta_bytes": {
+        "min": 0,
+        "median": 0,
+        "max": 0
+      },
+      "peak_rss_bytes": {
+        "min": 43581440,
+        "median": 43581440,
+        "max": 43581440
+      }
+    },
+    "default": {
+      "successes": 3,
+      "runs": [
+        {
+          "status": "ok",
+          "restore_ns": 6397020,
+          "load_ns": 6045758,
+          "construct_ns": 351262,
+          "rss_before_bytes": 35553280,
+          "rss_after_bytes": 35684352,
+          "rss_delta_bytes": 131072,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2113881,
+          "posting_fold_ns": 1658811,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "lookup_benchmark_ok": 1,
+          "lookup_first_miss_ns": 1446245,
+          "lookup_miss_count": 100,
+          "lookup_miss_median_ns": 535869,
+          "lookup_miss_p99_ns": 746016,
+          "lookup_live_count": 100,
+          "lookup_live_median_ns": 3246,
+          "lookup_live_p99_ns": 9117,
+          "lookup_terminal_count": 100,
+          "lookup_terminal_median_ns": 582473,
+          "lookup_terminal_p99_ns": 982368,
+          "lookup_conflict_count": 100,
+          "lookup_conflict_median_ns": 607441,
+          "lookup_conflict_p99_ns": 878299,
+          "checked_keys": 3
+        },
+        {
+          "status": "ok",
+          "restore_ns": 7191980,
+          "load_ns": 6890563,
+          "construct_ns": 301417,
+          "rss_before_bytes": 35307520,
+          "rss_after_bytes": 35307520,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2589651,
+          "posting_fold_ns": 1362374,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "lookup_benchmark_ok": 1,
+          "lookup_first_miss_ns": 1558019,
+          "lookup_miss_count": 100,
+          "lookup_miss_median_ns": 541445,
+          "lookup_miss_p99_ns": 808957,
+          "lookup_live_count": 100,
+          "lookup_live_median_ns": 5756,
+          "lookup_live_p99_ns": 26491,
+          "lookup_terminal_count": 100,
+          "lookup_terminal_median_ns": 583515,
+          "lookup_terminal_p99_ns": 893329,
+          "lookup_conflict_count": 100,
+          "lookup_conflict_median_ns": 585945,
+          "lookup_conflict_p99_ns": 868080,
+          "checked_keys": 3
+        },
+        {
+          "status": "ok",
+          "restore_ns": 6145599,
+          "load_ns": 5954544,
+          "construct_ns": 191055,
+          "rss_before_bytes": 35491840,
+          "rss_after_bytes": 35491840,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 1911144,
+          "posting_fold_ns": 1621571,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "lookup_benchmark_ok": 1,
+          "lookup_first_miss_ns": 1735758,
+          "lookup_miss_count": 100,
+          "lookup_miss_median_ns": 557751,
+          "lookup_miss_p99_ns": 773279,
+          "lookup_live_count": 100,
+          "lookup_live_median_ns": 5571,
+          "lookup_live_p99_ns": 76586,
+          "lookup_terminal_count": 100,
+          "lookup_terminal_median_ns": 601119,
+          "lookup_terminal_p99_ns": 849124,
+          "lookup_conflict_count": 100,
+          "lookup_conflict_median_ns": 614946,
+          "lookup_conflict_p99_ns": 922404,
+          "checked_keys": 3
+        }
+      ],
+      "restore_ns": {
+        "min": 6145599,
+        "median": 6397020,
+        "max": 7191980
+      },
+      "load_ns": {
+        "min": 5954544,
+        "median": 6045758,
+        "max": 6890563
+      },
+      "construct_ns": {
+        "min": 191055,
+        "median": 301417,
+        "max": 351262
+      },
+      "rss_delta_bytes": {
+        "min": 0,
+        "median": 0,
+        "max": 131072
+      },
+      "peak_rss_bytes": {
+        "min": 43581440,
+        "median": 43581440,
+        "max": 43581440
+      }
+    },
+    "diagnostic": {
+      "successes": 3,
+      "runs": [
+        {
+          "status": "ok",
+          "restore_ns": 5592512,
+          "load_ns": 5418840,
+          "construct_ns": 173672,
+          "rss_before_bytes": 35663872,
+          "rss_after_bytes": 35663872,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2079946,
+          "posting_fold_ns": 1075726,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "checked_keys": 3
+        },
+        {
+          "status": "ok",
+          "restore_ns": 7925552,
+          "load_ns": 7572647,
+          "construct_ns": 352905,
+          "rss_before_bytes": 35430400,
+          "rss_after_bytes": 35430400,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 3177765,
+          "posting_fold_ns": 1408663,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "checked_keys": 3
+        },
+        {
+          "status": "ok",
+          "restore_ns": 6503124,
+          "load_ns": 6221967,
+          "construct_ns": 281157,
+          "rss_before_bytes": 35512320,
+          "rss_after_bytes": 35512320,
+          "rss_delta_bytes": 0,
+          "peak_rss_bytes": 43581440,
+          "orders_rows": 16,
+          "reservations_rows": 16,
+          "balances_rows": 1,
+          "latest_sequence": 1,
+          "active_fetch_ns": 2284308,
+          "posting_fold_ns": 1602504,
+          "restored_orders": 16,
+          "restored_keys": 16,
+          "checked_keys": 3
+        }
+      ],
+      "restore_ns": {
+        "min": 5592512,
+        "median": 6503124,
+        "max": 7925552
+      },
+      "load_ns": {
+        "min": 5418840,
+        "median": 6221967,
+        "max": 7572647
+      },
+      "construct_ns": {
+        "min": 173672,
+        "median": 281157,
+        "max": 352905
+      },
+      "rss_delta_bytes": {
+        "min": 0,
+        "median": 0,
+        "max": 0
+      },
+      "peak_rss_bytes": {
+        "min": 43581440,
+        "median": 43581440,
+        "max": 43581440
+      }
+    },
+    "bytes": {
+      "status": "ok",
+      "response_bytes": 8902,
+      "orders_rows": 16,
+      "reservations_rows": 16,
+      "balances_rows": 1,
+      "latest_sequence": 1,
+      "restored_orders": 16,
+      "restored_keys": 16,
+      "checked_keys": 3
+    }
+  },
+  "startup_cliff": {
+    "per_run": [
+      {
+        "largest_pass": 1000000,
+        "first_timeout_failure": null
+      },
+      {
+        "largest_pass": 1000000,
+        "first_timeout_failure": null
+      },
+      {
+        "largest_pass": 1000000,
+        "first_timeout_failure": null
+      }
+    ],
+    "interpretation": "startup failure, not slow recovery; censored points are not timeout evidence"
+  },
+  "compatibility_cliff": {
+    "per_run": [
+      {
+        "largest_pass": 100000,
+        "first_timeout_failure": 1000000
+      },
+      {
+        "largest_pass": 100000,
+        "first_timeout_failure": 1000000
+      },
+      {
+        "largest_pass": 100000,
+        "first_timeout_failure": 1000000
+      }
+    ],
+    "interpretation": "startup failure, not slow recovery; censored points are not timeout evidence"
+  }
+}
