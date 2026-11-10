@@ -140,13 +140,27 @@ class SyncLedger:
         reservation: Any | None,
         band_price: Any | None = None,
     ) -> int:
+        return self._record_durably(
+            lambda adapter: adapter.record_fill(fill, instrument, order, reservation, band_price)
+        )
+
+    def record_execution(
+        self,
+        fills: tuple[Fill, ...],
+        instrument: Any,
+        order: Order,
+        band_price: Any | None = None,
+    ) -> int | None:
+        return self._record_durably(
+            lambda adapter: adapter.record_execution(fills, instrument, order, band_price)
+        )
+
+    def _record_durably(self, operation: Callable[[LedgerAdapter], Any]) -> Any:
         started = time.monotonic_ns()
         for attempt in range(3):
             try:
                 sequence = self._call(
-                    lambda adapter: adapter.record_fill(
-                        fill, instrument, order, reservation, band_price
-                    ),
+                    operation,
                     timeout=self.hard_timeout_seconds,
                 )
                 if self.metrics is not None:

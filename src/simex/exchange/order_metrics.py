@@ -35,6 +35,7 @@ REASONS = frozenset(
         "market_closed",
         "no_liquidity",
         "insufficient_funds",
+        "fok_not_fillable",
         "writer_halted",
         "account_halted",
         "persistence_failure",

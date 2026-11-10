@@ -40,8 +40,14 @@ class Side(StrEnum):
 
 
 class OrderType(StrEnum):
-    MARKET = "market"  # IOC inside the pair's band; never rests (ADR 0014)
-    LIMIT = "limit"  # good till cancelled; the crossing part fills as taker, the rest rests
+    MARKET = "market"  # band-bounded immediate execution; never rests (ADR 0014/0028)
+    LIMIT = "limit"  # time in force decides whether a crossing remainder rests
+
+
+class TimeInForce(StrEnum):
+    GTC = "GTC"
+    IOC = "IOC"
+    FOK = "FOK"
 
 
 class OrderStatus(StrEnum):
@@ -118,6 +124,7 @@ class OrderRequest:
     quantity: Decimal  # in the base currency
     limit_price: Decimal | None = None  # limit orders only
     reasoning: str = ""
+    time_in_force: TimeInForce = TimeInForce.GTC
 
     @classmethod
     def parse(cls, payload: Mapping) -> OrderRequest:
@@ -137,6 +144,12 @@ class OrderRequest:
             kind = OrderType(payload.get("type"))
         except ValueError:
             raise field_error("bad_field", "type", "must be one of: market, limit") from None
+        try:
+            time_in_force = TimeInForce(payload.get("time_in_force", "GTC"))
+        except (ValueError, TypeError):
+            raise field_error(
+                "bad_field", "time_in_force", "must be one of: GTC, IOC, FOK"
+            ) from None
         product = payload.get("product_id")
         if not isinstance(product, str):
             raise field_error("unknown_product", "product_id", "must name a configured product")
@@ -155,11 +168,20 @@ class OrderRequest:
                 f"must be a string of at most {MAX_REASONING_LENGTH} characters",
             )
         return cls(
-            client_order_id, product, side, kind, _decimal(payload, "quantity"), price, reasoning
+            client_order_id,
+            product,
+            side,
+            kind,
+            _decimal(payload, "quantity"),
+            price,
+            reasoning,
+            time_in_force,
         )
 
     def check(self, instrument: Instrument) -> None:
         """The pair's grids and minimum. Off-grid values are rejected, never rounded."""
+        if not isinstance(self.time_in_force, TimeInForce):
+            raise field_error("bad_field", "time_in_force", "must be one of: GTC, IOC, FOK")
         if self.quantity <= 0 or not instrument.on_size_grid(self.quantity):
             raise OrderError(
                 "bad_quantity",
@@ -208,6 +230,7 @@ class OrderRequest:
             "quantity": str(self.quantity),
             "limit_price": None if self.limit_price is None else str(self.limit_price),
             "reasoning": self.reasoning,
+            "time_in_force": self.time_in_force.value,
         }
 
 
@@ -285,6 +308,7 @@ class Order:
             quantity=Decimal(record["quantity"]),
             limit_price=(None if record["limit_price"] is None else Decimal(record["limit_price"])),
             reasoning=record.get("reasoning") or "",
+            time_in_force=TimeInForce(record.get("time_in_force", "GTC")),
         )
         order = cls(
             order_id=record["order_id"],
@@ -335,6 +359,8 @@ class Order:
             raise InvalidTransition(f"cannot activate order {self.order_id}: {self.status}")
         if self.request.type is OrderType.MARKET:
             raise InvalidTransition("a market order never rests")
+        if self.request.time_in_force is not TimeInForce.GTC:
+            raise InvalidTransition("an IOC/FOK order never rests")
         self.status = OrderStatus.OPEN
 
     def record_fill(

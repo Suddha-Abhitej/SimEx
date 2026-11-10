@@ -2,8 +2,9 @@
 
 It owns live orders and every balance; durable terminal history stays in the ledger (ADR 0027).
 Without a ledger it retains historical orders for idempotency. One task drives order state. The
-pair engines (#8) own matching and the book, and report back through `record_fill`, `activate`,
-`cancel_now`, `expire` and `reject_on_effect`. Every change is appended to `events` with a
+pair engines (#8) own matching and the book, and report back through `record_fill`,
+`record_execution`, `activate`, `cancel_now`, `expire` and `reject_on_effect`.
+Every change is appended to `events` with a
 sequence number in a bounded notification buffer. Fill notifications follow ledger commit;
 the buffer is not durable history.
 
@@ -25,10 +26,13 @@ import threading
 import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
+from copy import copy, deepcopy
 from decimal import ROUND_DOWN, ROUND_UP, Decimal
 from typing import Protocol
 
 from .accounts import (
+    FEES,
+    MARKET,
     SYSTEM_ACCOUNTS,
     Accounts,
     InsufficientFunds,
@@ -49,6 +53,7 @@ from .orders import (
     OrderStatus,
     OrderType,
     Side,
+    TimeInForce,
     field_error,
     order_id_for,
 )
@@ -61,6 +66,14 @@ class MarketGate(Protocol):
 
 
 class AccountLedger(Protocol):
+    def record_execution(
+        self,
+        fills: tuple[Fill, ...],
+        instrument: Instrument,
+        order: Order,
+        band_price: Decimal | None = None,
+    ) -> int | None: ...
+
     def save_order(
         self, order: Order, reservation: object | None, band_price: Decimal | None = None
     ) -> None: ...
@@ -503,6 +516,8 @@ class AccountWriter:
     ) -> Fill:
         order = self.orders[order_id]
         self._require_running(order.account_id)
+        if order.request.time_in_force is not TimeInForce.GTC:
+            raise ValueError("IOC/FOK fills require atomic execution finalization")
         if order.request.type is OrderType.MARKET and liquidity is Liquidity.MAKER:
             raise ValueError("a market order never rests, so it can't fill as maker")
         if order.request.type is OrderType.MARKET:
@@ -536,6 +551,74 @@ class AccountWriter:
             self._persist_order(order)
         return fill
 
+    def record_execution(
+        self, order_id: str, plan: tuple[tuple[Decimal, Decimal], ...], ts_ns: int
+    ) -> tuple[Fill, ...]:
+        """Finalize a planned IOC/FOK without publishing any intermediate partial state."""
+        order = self.orders[order_id]
+        self._require_running(order.account_id)
+        if (
+            order.status is not OrderStatus.PENDING
+            or order.request.time_in_force is TimeInForce.GTC
+        ):
+            raise ValueError("only pending IOC/FOK orders use atomic finalization")
+        if (
+            order.request.time_in_force is TimeInForce.FOK
+            and sum((quantity for _, quantity in plan), Decimal(0)) != order.remaining
+        ):
+            raise ValueError("FOK execution plan must fill the complete order")
+        instrument = self.instruments[order.product_id]
+        band = self.band_prices.get(order_id)
+        staged_order = deepcopy(order)
+        with self._balance_lock:
+            # Copy only the affected balances and reservation, never lifetime account history.
+            staged = Accounts()
+            for account in (order.account_id, MARKET, FEES):
+                for asset in (instrument.base, instrument.quote):
+                    staged.balances[account][asset] = copy(self.accounts.balance(account, asset))
+            staged.reservations[order_id] = copy(self.accounts.reservations[order_id])
+            fills = []
+            for price, quantity in plan:
+                if band is not None and (
+                    (order.side is Side.BUY and price > band)
+                    or (order.side is Side.SELL and price < band)
+                ):
+                    raise ValueError("execution plan exceeds accepted market band")
+                fill = staged_order.record_fill(
+                    price, quantity, Liquidity.TAKER, FillCause.TAKER, ts_ns, self.fees, instrument
+                )
+                staged.settle(fill, instrument)
+                fills.append(fill)
+            if not staged_order.status.terminal:
+                staged_order.cancel(ts_ns)
+            staged.release(order_id)
+            if self.ledger is not None:
+                try:
+                    sequence = self.ledger.record_execution(
+                        tuple(fills), instrument, staged_order, band
+                    )
+                    if sequence is not None:
+                        self.applied_sequences[order.account_id] = sequence
+                except Exception:
+                    self.halted = True
+                    raise
+            for account, assets in staged.balances.items():
+                for asset, balance in assets.items():
+                    original = self.accounts.balance(account, asset)
+                    original.available, original.reserved = balance.available, balance.reserved
+            self.accounts.reservations.pop(order_id)
+            # Preserve the Order reference held by the engine and other synchronous callers.
+            order.__dict__.update(staged_order.__dict__)
+            if self.ledger is not None:
+                self.orders.pop(order_id)
+                self.by_key.pop((order.account_id, order.request.client_order_id))
+            self.band_prices.pop(order_id, None)
+        for fill in fills:
+            self._emit("fill", fill=fill.to_dict())
+        if order.status is OrderStatus.CANCELLED:
+            self._emit("order_cancelled", order=order.to_dict())
+        return tuple(fills)
+
     def activate(self, order_id: str, ts_ns: int) -> None:
         order = self.orders[order_id]
         self._require_running(order.account_id)
@@ -557,12 +640,16 @@ class AccountWriter:
         self._close(order)
         self._emit("order_expired", order=order.to_dict())
 
-    def reject_on_effect(self, order_id: str, reason: str, ts_ns: int) -> None:
-        """The gate closed between arrival and taking effect (#9)."""
+    def reject_on_effect(
+        self, order_id: str, reason: str, ts_ns: int, *, details: Mapping[str, str] | None = None
+    ) -> None:
+        """A gate or immediate-execution policy refused an already accepted order."""
         order = self.orders[order_id]
         self._require_running(order.account_id)
         order.reject(reason, ts_ns)
-        order.reject_details = _gate_details(reason, order.product_id)
+        order.reject_details = (
+            dict(details) if details is not None else _gate_details(reason, order.product_id)
+        )
         self._close(order)
         self._emit("order_rejected", order=order.to_dict())
         self._observe_order("effect_rejected", order.product_id, reason)

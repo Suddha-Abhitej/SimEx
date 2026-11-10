@@ -79,6 +79,7 @@ class Client:
         quantity: Decimal | str,
         reasoning: str,
         limit_price: Decimal | str | None = None,
+        time_in_force: str = "GTC",
     ) -> dict:
         payload = {
             "client_order_id": client_order_id,
@@ -87,6 +88,7 @@ class Client:
             "type": type,
             "quantity": codec.money_input("quantity", quantity),
             "reasoning": reasoning,
+            "time_in_force": time_in_force,
         }
         if limit_price is not None:
             payload["limit_price"] = codec.money_input("limit_price", limit_price)

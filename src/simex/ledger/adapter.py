@@ -29,7 +29,7 @@ ORDER_COLUMNS = (
     "reasoning, created_at_ns, effective_at_ns, filled_quantity, filled_notional, "
     "maker_notional, taker_notional, fees, fill_count, reject_reason, "
     "cancel_requested_at_ns, cancel_effective_at_ns, closed_at_ns, "
-    "market_band_price, reject_details"
+    "market_band_price, reject_details, time_in_force"
 )
 # Keep identical to migration 009; tests compare both with orders.TERMINAL and EXPLAIN it.
 LIVE_ORDER_PREDICATE = "status NOT IN ('filled', 'cancelled', 'expired', 'rejected')"
@@ -147,6 +147,68 @@ class LedgerAdapter:
         reservation: Any | None,
         band_price: Decimal | None,
     ) -> int:
+        transaction_started = monotonic_ns()
+        async with self.connection.transaction():
+            sequence, inserted = await self._write_fill(
+                fill, instrument, order, reservation, band_price, transaction_started
+            )
+        if inserted:
+            await self._fail("after_commit")
+            self._observe("commit", monotonic_ns() - transaction_started)
+        return sequence
+
+    async def record_execution(
+        self,
+        fills: tuple[Fill, ...],
+        instrument: Instrument,
+        order: Order,
+        band_price: Decimal | None = None,
+    ) -> int | None:
+        """Commit an IOC/FOK's fills and terminal snapshot together (ADR 0028)."""
+        if self.halted:
+            raise LedgerHalted("ledger is halted")
+        last_error = None
+        for attempt in range(self.retries):
+            try:
+                started = monotonic_ns()
+                sequence = None
+                inserted = not fills
+                async with self.connection.transaction():
+                    for fill in fills:
+                        value, fresh = await self._write_fill(
+                            fill, instrument, None, None, None, monotonic_ns()
+                        )
+                        sequence = value if sequence is None else max(sequence, value)
+                        inserted |= fresh
+                    await self._save_order(order, None, band_price)
+                    await self._fail("before_execution_commit")
+                if inserted:
+                    await self._fail("after_commit")
+                    self._observe("commit", monotonic_ns() - started)
+                return sequence
+            except LedgerIntegrityError:
+                if self.metrics is not None:
+                    self.metrics.conflicts.inc()
+                raise
+            except Exception as exc:
+                last_error = exc
+                if attempt + 1 < self.retries:
+                    await asyncio.sleep(self.backoff_seconds * 2**attempt)
+        self.halted = True
+        if self.metrics is not None:
+            self.metrics.halts.inc()
+        raise LedgerHalted("ledger failure halted immediate execution") from last_error
+
+    async def _write_fill(
+        self,
+        fill: Fill,
+        instrument: Instrument,
+        order: Order | None,
+        reservation: Any | None,
+        band_price: Decimal | None,
+        transaction_started: int,
+    ) -> tuple[int, bool]:
+        """Existing fill rows and postings; the caller owns the transaction boundary."""
         payload = fill.to_dict()
         domain = (
             fill.fill_id,
@@ -163,99 +225,95 @@ class LedgerAdapter:
             fill.ts_ns,
         )
         event_key = f"fill:{fill.fill_id}"
-        transaction_started = monotonic_ns()
-        async with self.connection.transaction():
-            sequence = await self.connection.fetchval(
-                "INSERT INTO ledger_transactions (transaction_id) VALUES ($1) "
-                "ON CONFLICT (transaction_id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id "
-                "RETURNING sequence",
-                event_key,
-            )
-            self._observe("transaction_begin", monotonic_ns() - transaction_started)
-            await self._fail("before_fill")
-            row = await self.connection.fetchrow(
-                "SELECT fill_id, order_id, account_id, product_id, side, price, quantity, "
-                "liquidity, cause, fee, fee_asset, ts_ns FROM fills WHERE fill_id = $1",
-                fill.fill_id,
-            )
-            if row is not None:
-                existing = tuple(
-                    row[field]
-                    for field in (
-                        "fill_id",
-                        "order_id",
-                        "account_id",
-                        "product_id",
-                        "side",
-                        "price",
-                        "quantity",
-                        "liquidity",
-                        "cause",
-                        "fee",
-                        "fee_asset",
-                        "ts_ns",
-                    )
+        sequence = await self.connection.fetchval(
+            "INSERT INTO ledger_transactions (transaction_id) VALUES ($1) "
+            "ON CONFLICT (transaction_id) DO UPDATE SET transaction_id=EXCLUDED.transaction_id "
+            "RETURNING sequence",
+            event_key,
+        )
+        self._observe("transaction_begin", monotonic_ns() - transaction_started)
+        await self._fail("before_fill")
+        row = await self.connection.fetchrow(
+            "SELECT fill_id, order_id, account_id, product_id, side, price, quantity, "
+            "liquidity, cause, fee, fee_asset, ts_ns FROM fills WHERE fill_id = $1",
+            fill.fill_id,
+        )
+        if row is not None:
+            existing = tuple(
+                row[field]
+                for field in (
+                    "fill_id",
+                    "order_id",
+                    "account_id",
+                    "product_id",
+                    "side",
+                    "price",
+                    "quantity",
+                    "liquidity",
+                    "cause",
+                    "fee",
+                    "fee_asset",
+                    "ts_ns",
                 )
-                if existing != domain:
-                    raise LedgerIntegrityError(f"fill payload conflict for {fill.fill_id}")
-                if order is not None:
-                    await self._save_order(order, reservation, band_price)
-                return sequence
-            await self.connection.execute(
-                "INSERT INTO fills (fill_id, order_id, account_id, product_id, side, price, "
-                "quantity, liquidity, cause, fee, fee_asset, ts_ns, source_key) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
-                *domain[:12],
-                event_key,
             )
-            self._observe("fill_insert", monotonic_ns() - transaction_started)
-            await self._fail("after_fill")
-            for _index, posting in enumerate(fill_postings(fill, instrument)):
-                await self.connection.execute(
-                    "INSERT INTO ledger_postings (posting_id, transaction_id, fill_id, "
-                    "transaction_sequence, account_id, asset, amount, entry_type) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
-                    uuid.uuid4(),
-                    event_key,
-                    fill.fill_id,
-                    sequence,
-                    posting.account_id,
-                    posting.asset,
-                    posting.amount,
-                    posting.entry_type,
-                )
-            self._observe("postings", monotonic_ns() - transaction_started)
-            await self._fail("after_postings")
-            await self.connection.execute(
-                "INSERT INTO ledger_events (event_id, event_key, aggregate_type, aggregate_id, "
-                "aggregate_seq, event_type, occurred_at_ns, payload) "
-                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
-                uuid.uuid4(),
-                event_key,
-                "fill",
-                fill.order_id,
-                int(fill.fill_id.rsplit("-", 1)[-1]),
-                "fill",
-                fill.ts_ns,
-                json.dumps(payload),
-            )
-            self._observe("event", monotonic_ns() - transaction_started)
-            await self._fail("after_event")
-            await self.connection.execute(
-                "INSERT INTO outbox (outbox_id, event_key, event_type, payload) "
-                "VALUES ($1,$2,$3,$4::jsonb)",
-                uuid.uuid4(),
-                event_key,
-                "fill",
-                json.dumps(payload),
-            )
-            self._observe("outbox", monotonic_ns() - transaction_started)
-            await self._fail("after_outbox")
+            if existing != domain:
+                raise LedgerIntegrityError(f"fill payload conflict for {fill.fill_id}")
             if order is not None:
                 await self._save_order(order, reservation, band_price)
-        await self._fail("after_commit")
-        self._observe("commit", monotonic_ns() - transaction_started)
-        return sequence
+            return sequence, False
+        await self.connection.execute(
+            "INSERT INTO fills (fill_id, order_id, account_id, product_id, side, price, "
+            "quantity, liquidity, cause, fee, fee_asset, ts_ns, source_key) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
+            *domain[:12],
+            event_key,
+        )
+        self._observe("fill_insert", monotonic_ns() - transaction_started)
+        await self._fail("after_fill")
+        for _index, posting in enumerate(fill_postings(fill, instrument)):
+            await self.connection.execute(
+                "INSERT INTO ledger_postings (posting_id, transaction_id, fill_id, "
+                "transaction_sequence, account_id, asset, amount, entry_type) "
+                "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                uuid.uuid4(),
+                event_key,
+                fill.fill_id,
+                sequence,
+                posting.account_id,
+                posting.asset,
+                posting.amount,
+                posting.entry_type,
+            )
+        self._observe("postings", monotonic_ns() - transaction_started)
+        await self._fail("after_postings")
+        await self.connection.execute(
+            "INSERT INTO ledger_events (event_id, event_key, aggregate_type, aggregate_id, "
+            "aggregate_seq, event_type, occurred_at_ns, payload) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+            uuid.uuid4(),
+            event_key,
+            "fill",
+            fill.order_id,
+            int(fill.fill_id.rsplit("-", 1)[-1]),
+            "fill",
+            fill.ts_ns,
+            json.dumps(payload),
+        )
+        self._observe("event", monotonic_ns() - transaction_started)
+        await self._fail("after_event")
+        await self.connection.execute(
+            "INSERT INTO outbox (outbox_id, event_key, event_type, payload) "
+            "VALUES ($1,$2,$3,$4::jsonb)",
+            uuid.uuid4(),
+            event_key,
+            "fill",
+            json.dumps(payload),
+        )
+        self._observe("outbox", monotonic_ns() - transaction_started)
+        await self._fail("after_outbox")
+        if order is not None:
+            await self._save_order(order, reservation, band_price)
+        return sequence, True
 
     def _observe(self, phase: str, elapsed_ns: int) -> None:
         if self.metrics is not None:
@@ -276,9 +334,10 @@ class LedgerAdapter:
             "reasoning, "
             "created_at_ns, effective_at_ns, filled_quantity, filled_notional, maker_notional, "
             "taker_notional, fees, fill_count, reject_reason, cancel_requested_at_ns, "
-            "cancel_effective_at_ns, closed_at_ns, market_band_price, reject_details) VALUES "
+            "cancel_effective_at_ns, closed_at_ns, market_band_price, reject_details, "
+            "time_in_force) VALUES "
             "($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,"
-            "$20::jsonb) "
+            "$20::jsonb,$21) "
             "ON CONFLICT (order_id) DO UPDATE SET status=EXCLUDED.status, "
             "filled_quantity=EXCLUDED.filled_quantity, filled_notional=EXCLUDED.filled_notional, "
             "maker_notional=EXCLUDED.maker_notional, taker_notional=EXCLUDED.taker_notional, "
@@ -310,6 +369,7 @@ class LedgerAdapter:
             order.closed_at_ns,
             band_price,
             json.dumps(order.reject_details),
+            order.request.time_in_force.value,
         )
         if reservation is None:
             await self.connection.execute(

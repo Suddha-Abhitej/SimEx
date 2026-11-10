@@ -45,7 +45,7 @@ from simex.marketdata import BookAudit, BookUpdate, ResyncMarker, Trade, TradeDe
 from .attribution import Cancel, ShrinkMatcher, book_side_hit
 from .fees import Liquidity
 from .gate import MarketStatus
-from .orders import FillCause, Order, OrderStatus, OrderType, Side
+from .orders import FillCause, Order, OrderStatus, OrderType, Side, TimeInForce
 from .writer import AccountWriter
 
 ZERO = Decimal(0)
@@ -381,6 +381,40 @@ class PairEngine:
             self.writer.reject_on_effect(order.order_id, reason, now)
             return
         request = order.request
+        if request.time_in_force is not TimeInForce.GTC:
+            if request.type is OrderType.MARKET:
+                self.stats.add("market_orders")
+                edge = self.writer.band_prices[order.order_id]
+            else:
+                assert request.limit_price is not None
+                edge = request.limit_price
+            plan, bound = self._plan_take(order, edge)
+            if request.type is OrderType.MARKET and bound:
+                self.stats.add("band_binds")
+            if (
+                request.time_in_force is TimeInForce.FOK
+                and sum((quantity for _, quantity in plan), ZERO) < order.remaining
+            ):
+                reason = "fok_not_fillable"
+                self.stats.add(f"rejected_on_effect:{reason}")
+                rule = (
+                    "FOK requires the entire quantity at effect within the limit or accepted "
+                    "market band after depletion; reduce quantity or choose IOC/GTC"
+                )
+                self.writer.reject_on_effect(
+                    order.order_id,
+                    reason,
+                    now,
+                    details={"field": "time_in_force", "rule": rule, "detail": rule},
+                )
+                return
+            # Apply this exact plan; no second walk can disagree about depletion or the edge.
+            fills = self.writer.record_execution(order.order_id, plan, now)
+            book_side = "ask" if order.side is Side.BUY else "bid"
+            for fill in fills:
+                self.stats.add("taker_fills", fill.quantity)
+                self._deplete(book_side, fill.price, fill.quantity, now)
+            return
         if request.type is OrderType.MARKET:
             self.stats.add("market_orders")
             edge = self.writer.band_prices[order.order_id]
@@ -422,27 +456,41 @@ class PairEngine:
     def _take(self, order: Order, edge: Decimal, now: int) -> bool:
         """Walk the opposite side as taker up to `edge`. Returns True if liquidity remained
         beyond the edge when the order stopped short (the band or limit bound)."""
+        plan, bound = self._plan_take(order, edge)
+        book_side = "ask" if order.side is Side.BUY else "bid"
+        for price, quantity in plan:
+            self.writer.record_fill(
+                order.order_id, price, quantity, Liquidity.TAKER, FillCause.TAKER, now
+            )
+            self.stats.add("taker_fills", quantity)
+            self._deplete(book_side, price, quantity, now)
+        return bound
+
+    def _plan_take(
+        self, order: Order, edge: Decimal
+    ) -> tuple[tuple[tuple[Decimal, Decimal], ...], bool]:
+        """One read-only book walk for every policy; execution consumes its exact plan."""
         buy = order.side is Side.BUY
         book_side = "ask" if buy else "bid"
         levels = self.book.asks if buy else self.book.bids
+        remaining = order.remaining
+        plan = []
         for price, size in list(levels.items()):
             if (buy and price > edge) or (not buy and price < edge):
-                return order.remaining > 0 and any(
+                bound = remaining > 0 and any(
                     self._available(book_side, p, s) > 0
                     for p, s in levels.items()
                     if (p > edge if buy else p < edge)
                 )
-            if order.remaining <= 0:
-                return False
-            take = min(self._available(book_side, price, size), order.remaining)
+                return tuple(plan), bound
+            if remaining <= 0:
+                return tuple(plan), False
+            take = min(self._available(book_side, price, size), remaining)
             if take <= 0:
                 continue
-            self.writer.record_fill(
-                order.order_id, price, take, Liquidity.TAKER, FillCause.TAKER, now
-            )
-            self.stats.add("taker_fills", take)
-            self._deplete(book_side, price, take, now)
-        return False
+            plan.append((price, take))
+            remaining -= take
+        return tuple(plan), False
 
     # Market data -----------------------------------------------------------------------------
 

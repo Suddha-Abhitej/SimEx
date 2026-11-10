@@ -64,6 +64,7 @@ REASON_STATUS = {
             "bad_limit",
             "idempotency_key_reused",
             "insufficient_funds",
+            "fok_not_fillable",
             "off_grid_price",
             "off_grid_quantity",
             "below_min_size",
