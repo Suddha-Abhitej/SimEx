@@ -1,0 +1,59 @@
+{
+  "date": "2026-11-10",
+  "host": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+  "commit": "1836c69a6deb99822a1d37ad8ea26c8dd1a90746",
+  "tracked_dirty": false,
+  "warmup_orders_per_case": 10,
+  "perf_counter_nominal_resolution_ns": "1.000000000",
+  "smallest_observed_clock_step_ns": 170,
+  "results": {
+    "GTC_1_levels": {
+      "transaction_through_commit": {
+        "count": 100,
+        "median_ms": "8.894",
+        "sample_p99_ms": "16.195"
+      },
+      "execution_through_ack": {
+        "count": 100,
+        "median_ms": "12.773",
+        "sample_p99_ms": "33.538"
+      }
+    },
+    "GTC_3_levels": {
+      "transaction_through_commit": {
+        "count": 300,
+        "median_ms": "8.977",
+        "sample_p99_ms": "25.717"
+      },
+      "execution_through_ack": {
+        "count": 100,
+        "median_ms": "38.963",
+        "sample_p99_ms": "110.706"
+      }
+    },
+    "IOC_3_levels": {
+      "transaction_through_commit": {
+        "count": 100,
+        "median_ms": "19.800",
+        "sample_p99_ms": "48.500"
+      },
+      "execution_through_ack": {
+        "count": 100,
+        "median_ms": "20.765",
+        "sample_p99_ms": "49.438"
+      }
+    },
+    "FOK_3_levels": {
+      "transaction_through_commit": {
+        "count": 100,
+        "median_ms": "20.287",
+        "sample_p99_ms": "25.750"
+      },
+      "execution_through_ack": {
+        "count": 100,
+        "median_ms": "21.086",
+        "sample_p99_ms": "26.596"
+      }
+    }
+  }
+}

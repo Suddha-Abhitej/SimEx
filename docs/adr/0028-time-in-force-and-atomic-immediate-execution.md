@@ -85,3 +85,31 @@ per-fill crash behavior for compatibility.
 New binaries can migrate previous ledgers. An older binary must not operate a ledger containing
 new IOC/FOK orders: it would not understand their execution contract. No audit history is purged
 and no new shared mutable state crosses pair engines.
+
+## Measurement, 2026-11-10
+
+[Raw aggregate results](../measurements/tif-commit-2026-11-10.json), source commit
+`1836c69a6deb99822a1d37ad8ea26c8dd1a90746`. Linux x86 devcontainer under WSL2 on an AMD Ryzen 9
+8945HS laptop, local PostgreSQL 16.10; **not Oracle ARM64**. No test suite ran concurrently.
+Each case has 100 sequential synthetic orders after ten warm-ups, in a generated `simex_test`
+schema, with no Kafka/venue input. Other local services were not stopped. The monotonic clock's
+nominal resolution was 1 ns; its smallest observed step in 10,000 reads was 170 ns.
+
+| Case | Commit samples | Transaction-through-commit median / sample p99, ms | Execution-through-ack median / sample p99, ms |
+| --- | ---: | ---: | ---: |
+| GTC, one level | 100 | 8.894 / 16.195 | 12.773 / 33.538 |
+| GTC, three levels (separate transactions) | 300 | 8.977 / 25.717 | 38.963 / 110.706 |
+| IOC, three levels plus remainder cancellation | 100 | 19.800 / 48.500 | 20.765 / 49.438 |
+| FOK, three levels | 100 | 20.287 / 25.750 | 21.086 / 26.596 |
+
+The commit boundary is the existing adapter's cumulative `commit` phase, including transaction
+writes, not isolated COMMIT time. Execution timing starts after admission and advances simulated
+time directly to effect: it excludes the anti-cheat wait and live hold-back, and is **not**
+tick-to-fill latency or a throughput benchmark. Group commits do more work than a single fill;
+the IOC sample p99 is close to the existing 50 ms budget. These small, sequential samples are
+not deployment validation and do not justify changing a timeout or budget.
+
+Reproduce with `SIMEX_TEST_POSTGRES_DSN` set to the test database and
+`python tools/measure_tif_commit.py --samples 100` from the repository root. The tool refuses any
+database other than `simex_test`, validates generated schema names before DDL, and drops its
+schema in `finally`. Output contains system metrics only, no synthetic prices or order amounts.
