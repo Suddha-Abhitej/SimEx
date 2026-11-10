@@ -18,6 +18,7 @@ from .orders import (
     OrderStatus,
     OrderType,
     Side,
+    TimeInForce,
 )
 from .writer import AccountWriter, MarketGate
 
@@ -48,6 +49,7 @@ __all__ = [
     "OrderType",
     "PairEngine",
     "Side",
+    "TimeInForce",
     "StaleDataGate",
     "instruments_from_env",
 ]

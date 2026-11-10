@@ -36,6 +36,7 @@ An order body, using synthetic example prices:
   "product_id": "BTC-USD",
   "side": "buy",
   "type": "limit",
+  "time_in_force": "GTC",
   "quantity": "0.12345678",
   "limit_price": "100.00",
   "reasoning": "Synthetic connection example"
@@ -53,6 +54,35 @@ Position-limit refusals include the writer's `limit`, `attempted` and other `rej
 also retained inside the rejected order. `risk_limits_missing` is HTTP 503 and means server
 misconfiguration; the live runtime refuses to start without its risk policy.
 
+## Time in force
+
+`time_in_force` is optional and defaults to `GTC`. Only the exact strings `GTC`, `IOC`, `FOK`
+are accepted; an explicit null or unknown value returns structured `bad_field` detail.
+The SDK and MCP `place_order` accept the same optional argument. It is part of the immutable
+request: changing only time in force while reusing a client ID returns `idempotency_key_reused`.
+
+- **Limit GTC:** cross as taker, then rest the remainder until cancelled, as before.
+- **IOC:** take eligible liquidity once, then immediately cancel the remainder. A zero-fill
+  IOC is also `cancelled`; a completely filled IOC is `filled`.
+- **FOK:** fill the whole quantity at once or become `rejected` with `fok_not_fillable` and no
+  fills. The current book, limit/accepted band and prior simulated depletion determine eligibility.
+- **Market GTC:** preserves existing band-bounded immediate behavior and expires any remainder.
+  GTC never makes a market order rest. Explicit market IOC cancels its remainder instead;
+  market FOK requires full quantity inside the existing band.
+
+All policies keep the anti-cheat delay. IOC/FOK are accepted as durable `pending` orders with
+reservations until their effective time, then finish terminal without entering the maker queue.
+Explicit IOC/FOK fill groups, terminal snapshots and reservation release commit atomically.
+Pending orders recover with the same effective time and reservation; terminal orders remain only
+in durable history. See [ADR 0028](adr/0028-time-in-force-and-atomic-immediate-execution.md).
+
+**Poll outcomes explicitly:** the initial POST normally returns acceptance before execution.
+A FOK effect rejection or zero-fill IOC generates **no fill-stream event**; the stream still
+carries fills, halts and heartbeats only. Repeat the identical `place_order` body with its original
+`client_order_id` to retrieve the current order without readmission. `open_orders` lists only
+live orders, so disappearance alone does not explain an outcome. The HTTP 400 mapping for
+`fok_not_fillable` applies to that later replay/lookup, not the already returned acceptance.
+
 ## Actionable order refusals
 
 `reason` is the stable machine-readable contract. Details are separate top-level fields, shared
@@ -68,7 +98,7 @@ change. Validation before acceptance has no recorded order. A malformed payload 
 | `bad_price` | `field: limit_price`, `rule` requiring a positive multiple of the price tick, `increment`, `attempted`, `product_id`, `detail` |
 | `bad_client_order_id` | `field`, `rule` and `detail`: 1–64 characters from `A-Z a-z 0-9 . _ : -` |
 | `bad_decimal` / `bad_decimal_or_product` | `field`, `rule` and `detail` requiring a finite decimal string; no echo of the malformed input |
-| `bad_field` | `field`, `rule` and `detail`: permitted side/type values, or that market orders have no limit price |
+| `bad_field` | `field`, `rule` and `detail`: permitted side/type/time-in-force values, or that market orders have no limit price |
 | `unknown_product` | `field: product_id`, `rule` and `detail` requiring a configured product; HTTP 404 |
 | `reasoning_required` / `bad_reasoning` | `field`, `rule` and `detail` explaining the non-empty string / 8,192-character bound |
 | `quantity_limit` | Existing `rule`, `product_id`, `limit`, `attempted` quantity |
@@ -77,6 +107,7 @@ change. Validation before acceptance has no recorded order. A malformed payload 
 | `insufficient_funds` | `rule`, `product_id`, `asset`, `available`, and `required` where safe; available excludes existing reservations |
 | `stale_level2:...` / `feed_lagging:...` | `rule`, `product_id`, `detail` advising the caller to wait for fresh level2 / recovered feed lag; the entire reason suffix is unchanged; HTTP 503 |
 | `idempotency_key_reused` | `field`, `rule`, `detail` explaining that the ID already names a different order |
+| `fok_not_fillable` | `field: time_in_force`, `rule`, `detail`: full immediate quantity required; reduce quantity or select IOC/GTC. No book prices or available venue size. Effect rejection, HTTP 400 on a later replay/lookup. |
 
 The grid reasons remain `bad_price` and `bad_quantity`, including for off-grid input. The exchange
 never rounds or repairs an order. All monetary detail fields are Decimal strings on the wire;

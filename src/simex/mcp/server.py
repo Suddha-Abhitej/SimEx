@@ -26,6 +26,7 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
         quantity: str,
         limit_price: str | None = None,
         reasoning: str = "",
+        time_in_force: str = "GTC",
     ) -> dict[str, Any]:
         payload = {
             "client_order_id": client_order_id,
@@ -33,6 +34,7 @@ def create_server(tools: ExchangeTools, *, port: int = 8765) -> FastMCP:
             "side": side,
             "type": type,
             "quantity": quantity,
+            "time_in_force": time_in_force,
         }
         if limit_price is not None:
             payload["limit_price"] = limit_price

@@ -32,3 +32,4 @@ records copy [`template.md`](template.md) and take the next number.
 | [0025](0025-ingestor-clock-skew-diagnostic.md) | Sustained negative-lag warning and clock-skew diagnostic gauge semantics | Accepted |
 | [0026](0026-writer-admission-counter-contract.md) | Completed writer admissions, phase-specific rejection counters and failure-contained snapshots | Accepted |
 | [0027](0027-live-order-recovery-and-durable-idempotency.md) | Live-order recovery, durable historical identity and a separate startup budget | Accepted |
+| [0028](0028-time-in-force-and-atomic-immediate-execution.md) | Time in force, market compatibility and atomic IOC/FOK finalization | Accepted |
