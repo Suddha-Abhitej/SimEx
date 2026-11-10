@@ -77,6 +77,12 @@ Authorization headers, never URLs.
 
 ## See your own fill
 
+Orders may specify `time_in_force="GTC"`, `"IOC"` or `"FOK"`. The default preserves existing
+behavior, including immediate, band-bounded market execution. IOC cancels its unfilled remainder;
+FOK fills completely or rejects, after the same anti-cheat delay. A rejection or zero-fill IOC
+produces no fill-stream frame: poll by replaying the identical order request with the same client
+ID. See the [order contract](private-api.md#time-in-force) before changing the demonstration.
+
 In a third terminal with the same environment:
 
 ```bash
